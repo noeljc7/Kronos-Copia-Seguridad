@@ -1,123 +1,128 @@
-var KronosEngine = KronosEngine || { providers: {} };
+(function() {
+    KronosEngine.register({
+        name: "Cinemitas",
+        baseUrl: "https://cinemitas.org",
+        lang: "Latino",
+        type: "mixed", // Pelis y Series
 
-KronosEngine.providers['Cinemitas'] = {
-    
-    getLinks: function(dataStr) {
-        var links = [];
-        try {
-            var data = JSON.parse(dataStr);
-            var rawTitle = data.title; // Ej: "Chainsaw Man la película -Arco de Reze"
-            var isMovie = (data.type === "movie");
-            var season = data.season;
-            var episode = data.episode;
-
-            // --- PASO 1: LIMPIEZA DE TÍTULO (LA SOLUCIÓN) ---
-            // Cortamos el título para que sea más fácil de encontrar.
-            // "Chainsaw Man - Arco de Reze" -> "Chainsaw Man"
-            var cleanQuery = rawTitle.split(":")[0].split("-")[0].trim();
+        // 1. BUSCAR
+        search: function(query) {
+            var url = this.baseUrl + "/?s=" + encodeURIComponent(query);
+            var html = Android.fetchHtml(url);
+            var doc = Jsoup.parse(html);
+            var items = [];
             
-            bridge.log("Cinemitas: Buscando '" + cleanQuery + "' (Original: " + rawTitle + ")");
-
-            // --- PASO 2: BUSCAR EN API ---
-            var searchUrl = "https://cinemitas.org/wp-json/dooplay/search/?keyword=" + encodeURIComponent(cleanQuery);
+            // Selector basado en tu HTML (article.result-item)
+            var elements = doc.select("article.item"); 
             
-            var jsonResponse = bridge.fetchHtml(searchUrl);
-            if (!jsonResponse || jsonResponse.length < 5) return links;
-
-            var results = JSON.parse(jsonResponse);
-            
-            for (var key in results) {
-                var item = results[key];
+            for(var i=0; i<elements.size(); i++) {
+                var el = elements.get(i);
+                var link = el.select("a").attr("href");
+                var img = el.select("img").attr("src");
+                var title = el.select(".title").text();
+                var year = el.select(".year").text();
                 
-                // Filtro de Seguridad: Verificamos que el resultado contenga parte del título buscado
-                // para evitar falsos positivos si la búsqueda fue muy genérica.
-                if (item.title && item.url) {
-                    
-                    var targetUrl = item.url;
+                // Detectar si es serie o peli por la URL o clase
+                var isMovie = !link.includes("/tvshows/");
 
-                    // Lógica de Series (Igual que antes)
-                    if (!isMovie && season && episode) {
-                        if (targetUrl.indexOf("/tvshows/") !== -1) {
-                            if (targetUrl.endsWith("/")) targetUrl = targetUrl.slice(0, -1);
-                            targetUrl = targetUrl.replace("/tvshows/", "/episodes/");
-                            targetUrl = targetUrl + "-" + season + "x" + episode + "/";
-                        }
-                    }
+                items.push({
+                    title: title,
+                    year: year,
+                    url: link,
+                    poster: img,
+                    isMovie: isMovie
+                });
+            }
+            return JSON.stringify(items);
+        },
 
-                    bridge.log("Analizando: " + targetUrl);
-                    var pageHtml = bridge.fetchHtml(targetUrl);
+        // 2. DETALLES Y EPISODIOS
+        getDetails: function(url) {
+            var html = Android.fetchHtml(url);
+            var doc = Jsoup.parse(html);
+            
+            var details = {
+                title: doc.select("h1.s-title").text(),
+                desc: doc.select("div.wp-content p").text(),
+                background: doc.select("meta[property=og:image]").attr("content"),
+                episodes: []
+            };
+
+            // Extraer episodios (si es serie)
+            var eps = doc.select("ul.episodios li");
+            for(var i=0; i<eps.size(); i++) {
+                var ep = eps.get(i);
+                var epLink = ep.select("a").attr("href");
+                var epImg = ep.select("img").attr("src");
+                var epTitle = ep.select(".episodiotitle a").text();
+                var epNum = ep.select(".numerando").text().split("-")[1] || (i+1); // "1 - 1" -> 1
+                
+                details.episodes.push({
+                    name: epTitle,
+                    url: epLink,
+                    season: 1, // Cinemitas suele separar temporadas por URL, asumo 1 por ahora
+                    episode: parseInt(epNum),
+                    poster: epImg
+                });
+            }
+            
+            // Si es película, guardamos el ID para pedir enlaces luego
+            // El ID suele estar en un input hidden o en el shortlink
+            // <link rel='shortlink' href='https://cinemitas.org/?p=12528' />
+            var shortlink = doc.select("link[rel=shortlink]").attr("href");
+            var id = shortlink.split("?p=")[1];
+            details.internalId = id; 
+
+            return JSON.stringify(details);
+        },
+
+        // 3. OBTENER ENLACES (La magia del AJAX)
+        getLinks: function(url) {
+            var html = Android.fetchHtml(url);
+            var doc = Jsoup.parse(html);
+            var links = [];
+
+            // 1. Obtener el ID del post (vital para el AJAX)
+            var shortlink = doc.select("link[rel=shortlink]").attr("href");
+            var postId = shortlink.split("?p=")[1];
+
+            // 2. Buscar los botones de servidores (tabs)
+            // En Dooplay (el tema de la web), los IDs de opción están en #player-options-ul li
+            var options = doc.select("#player-options-ul li");
+
+            for(var i=0; i<options.size(); i++) {
+                var opt = options.get(i);
+                var type = opt.attr("data-type"); // "iframe", "mp4"
+                var post = opt.attr("data-post"); // El ID del post
+                var nume = opt.attr("data-nume"); // El número de opción (1, 2, 3...)
+                var title = opt.select(".title").text(); // "Latino - Voe"
+
+                // 3. HACER LA LLAMADA AJAX A LA API OCULTA
+                // URL: https://cinemitas.org/wp-admin/admin-ajax.php
+                // POST Data: action=doo_player_ajax&post=123&nume=1&type=iframe
+                
+                var ajaxUrl = this.baseUrl + "/wp-admin/admin-ajax.php";
+                var postData = "action=doo_player_ajax&post=" + post + "&nume=" + nume + "&type=" + type;
+                
+                // Usamos una función nueva del puente para hacer POST (necesitamos añadirla)
+                var jsonResponse = Android.post(ajaxUrl, postData); 
+                var json = JSON.parse(jsonResponse);
+                
+                if (json.embed_url) {
+                    var finalLink = json.embed_url;
+                    // Limpieza: A veces viene con comillas escapadas o redirecciones
+                    finalLink = finalLink.replace(/\\/g, ""); 
                     
-                    if (pageHtml) {
-                        // --- PASO 3: EXTRACCIÓN ROBUSTA (IDs OCULTOS) ---
-                        // Mejoré el Regex para aceptar espacios variables
-                        var regexIds = /data-post\s*=\s*['"](\d+)['"][\s\S]*?data-nume\s*=\s*['"](\d+)['"]/g;
-                        var match;
-                        
-                        while ((match = regexIds.exec(pageHtml)) !== null) {
-                            var postId = match[1];
-                            var numeId = match[2];
-                            
-                            // --- PASO 4: MAGIA AJAX (POST) ---
-                            // Pedimos el video real al servidor
-                            var videoJson = this.doPostRequest(
-                                "https://cinemitas.org/wp-admin/admin-ajax.php",
-                                "action=doo_player_ajax&post=" + postId + "&nume=" + numeId + "&type=" + (isMovie ? "movie" : "tv")
-                            );
-                            
-                            if (videoJson) {
-                                try {
-                                    var vData = JSON.parse(videoJson);
-                                    if (vData.embed_url) {
-                                        var cleanUrl = vData.embed_url.replace(/\\/g, "");
-                                        
-                                        // Filtramos para que no salga basura, solo lo que parece video
-                                        if (cleanUrl.indexOf("http") !== -1) {
-                                            links.push({
-                                                "name": "Cinemitas - Opción " + numeId,
-                                                "url": cleanUrl,
-                                                "quality": "HD",
-                                                "language": "Latino",
-                                                "isDirect": false,
-                                                "requiresWebView": true 
-                                            });
-                                        }
-                                    }
-                                } catch(e) { }
-                            }
-                        }
-                    }
+                    links.push({
+                        server: title,
+                        url: finalLink,
+                        lang: "Latino", // Casi todo en Cinemitas es Latino
+                        quality: "HD"
+                    });
                 }
             }
-
-        } catch (e) {
-            bridge.log("Error Cinemitas: " + e.toString());
+            return JSON.stringify(links);
         }
-        return links;
-    },
-
-    doPostRequest: function(urlStr, params) {
-        try {
-            var url = new java.net.URL(urlStr);
-            var conn = url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-            
-            var os = conn.getOutputStream();
-            var writer = new java.io.OutputStreamWriter(os, "UTF-8");
-            writer.write(params);
-            writer.flush();
-            writer.close();
-            os.close();
-            
-            var is = conn.getInputStream();
-            var scanner = new java.util.Scanner(is, "UTF-8").useDelimiter("\\A");
-            var response = scanner.hasNext() ? scanner.next() : "";
-            is.close();
-            
-            return response;
-        } catch (e) { return null; }
-    }
-};
+    });
+})();
 
