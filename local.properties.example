@@ -1,0 +1,11 @@
+# This file is intentionally tracked by git to provide a template.
+# Rename this to local.properties and add your local configuration.
+
+# Location of the SDK
+sdk.dir=/path/to/android/sdk
+
+# Configure signing (optional)
+# storeFile=/path/to/keystore.jks
+# storePassword=your_store_password
+# keyAlias=your_key_alias
+# keyPassword=your_key_password

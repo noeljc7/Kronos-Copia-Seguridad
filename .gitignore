@@ -1,0 +1,41 @@
+# Gradle files
+.gradle/
+build/
+*.apk
+*.aar
+*.ap_
+*.aab
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Log Files
+*.log
+
+# Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+
+# Keystore files
+*.jks
+*.keystore
+
+# Kotlin
+.kotlin/
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+libs/
+
+# Misc
+*.swp
+*.swo
+*~
+.classpath
+.project
+.settings/
