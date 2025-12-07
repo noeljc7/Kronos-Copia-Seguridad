@@ -2,85 +2,87 @@ var KronosEngine = KronosEngine || { providers: {} };
 
 KronosEngine.providers['Cinemitas'] = {
     
-    // Función Maestra: Convierte la petición de Kronos en enlaces de video
     getLinks: function(dataStr) {
         var links = [];
         try {
             var data = JSON.parse(dataStr);
-            var query = data.title; // Ej: "Chainsaw Man"
+            var rawTitle = data.title; // Ej: "Chainsaw Man la película -Arco de Reze"
             var isMovie = (data.type === "movie");
             var season = data.season;
             var episode = data.episode;
 
-            // 1. CONSULTAR LA API JSON (Tu descubrimiento clave)
-            var searchUrl = "https://cinemitas.org/wp-json/dooplay/search/?keyword=" + encodeURIComponent(query);
-            bridge.log("Cinemitas buscando API: " + searchUrl);
+            // --- PASO 1: LIMPIEZA DE TÍTULO (LA SOLUCIÓN) ---
+            // Cortamos el título para que sea más fácil de encontrar.
+            // "Chainsaw Man - Arco de Reze" -> "Chainsaw Man"
+            var cleanQuery = rawTitle.split(":")[0].split("-")[0].trim();
+            
+            bridge.log("Cinemitas: Buscando '" + cleanQuery + "' (Original: " + rawTitle + ")");
+
+            // --- PASO 2: BUSCAR EN API ---
+            var searchUrl = "https://cinemitas.org/wp-json/dooplay/search/?keyword=" + encodeURIComponent(cleanQuery);
             
             var jsonResponse = bridge.fetchHtml(searchUrl);
             if (!jsonResponse || jsonResponse.length < 5) return links;
 
             var results = JSON.parse(jsonResponse);
             
-            // La API devuelve un objeto con IDs como claves: {"1234": {...}, "5678": {...}}
             for (var key in results) {
                 var item = results[key];
                 
-                // Verificamos que tenga título y URL
+                // Filtro de Seguridad: Verificamos que el resultado contenga parte del título buscado
+                // para evitar falsos positivos si la búsqueda fue muy genérica.
                 if (item.title && item.url) {
                     
                     var targetUrl = item.url;
 
-                    // 2. LÓGICA INTELIGENTE PARA SERIES
-                    // La API devuelve la URL de la serie (ej: .../tvshows/robin-hood/)
-                    // Pero necesitamos el episodio (ej: .../episodes/robin-hood-1x4/)
+                    // Lógica de Series (Igual que antes)
                     if (!isMovie && season && episode) {
-                        // Paso A: Detectar si la URL es de una serie (/tvshows/)
                         if (targetUrl.indexOf("/tvshows/") !== -1) {
-                            // Paso B: Transformar la URL. 
-                            // De: https://cinemitas.org/tvshows/slug-serie/
-                            // A:  https://cinemitas.org/episodes/slug-serie-1x4/
-                            
-                            // Quitamos la barra final si existe
                             if (targetUrl.endsWith("/")) targetUrl = targetUrl.slice(0, -1);
-                            
-                            // Reemplazamos 'tvshows' por 'episodes'
                             targetUrl = targetUrl.replace("/tvshows/", "/episodes/");
-                            
-                            // Agregamos la temporada y episodio
                             targetUrl = targetUrl + "-" + season + "x" + episode + "/";
                         }
                     }
 
-                    bridge.log("Objetivo detectado (" + item.title + ") -> URL: " + targetUrl);
-
-                    // 3. ENTRAR A LA PÁGINA FINAL (Película o Episodio)
+                    bridge.log("Analizando: " + targetUrl);
                     var pageHtml = bridge.fetchHtml(targetUrl);
                     
                     if (pageHtml) {
-                        // 4. EXTRAER IFRAMES DE VIDEO
-                        // Buscamos patrones src="https://..." que contengan servidores de video conocidos
-                        // Basado en tus archivos, buscamos cosas como 'cvid.lat'
-                        
-                        var iframeRegex = /src\s*=\s*"([^"]+)"/g;
+                        // --- PASO 3: EXTRACCIÓN ROBUSTA (IDs OCULTOS) ---
+                        // Mejoré el Regex para aceptar espacios variables
+                        var regexIds = /data-post\s*=\s*['"](\d+)['"][\s\S]*?data-nume\s*=\s*['"](\d+)['"]/g;
                         var match;
                         
-                        while ((match = iframeRegex.exec(pageHtml)) !== null) {
-                            var src = match[1];
+                        while ((match = regexIds.exec(pageHtml)) !== null) {
+                            var postId = match[1];
+                            var numeId = match[2];
                             
-                            // Filtro de calidad: Solo iframes que parezcan videos reales
-                            // Agregamos 'cvid.lat' porque apareció en tus archivos de texto
-                            if (src.indexOf("cvid.lat") !== -1 || src.indexOf("video") !== -1 || src.indexOf("embed") !== -1 || src.indexOf("player") !== -1) {
-                                
-                                // Limpieza básica de URL
-                                if (src.startsWith("//")) src = "https:" + src;
-                                
-                                links.push({
-                                    "name": "Cinemitas - " + item.title,
-                                    "url": src,
-                                    "quality": "SD/HD",
-                                    "language": "Latino", // Cinemitas es mayormente Latino
-                                    "isDirect": false    // Es un iframe, requiere que el Resolver (ej: Voe) lo procese después
-                                });
+                            // --- PASO 4: MAGIA AJAX (POST) ---
+                            // Pedimos el video real al servidor
+                            var videoJson = this.doPostRequest(
+                                "https://cinemitas.org/wp-admin/admin-ajax.php",
+                                "action=doo_player_ajax&post=" + postId + "&nume=" + numeId + "&type=" + (isMovie ? "movie" : "tv")
+                            );
+                            
+                            if (videoJson) {
+                                try {
+                                    var vData = JSON.parse(videoJson);
+                                    if (vData.embed_url) {
+                                        var cleanUrl = vData.embed_url.replace(/\\/g, "");
+                                        
+                                        // Filtramos para que no salga basura, solo lo que parece video
+                                        if (cleanUrl.indexOf("http") !== -1) {
+                                            links.push({
+                                                "name": "Cinemitas - Opción " + numeId,
+                                                "url": cleanUrl,
+                                                "quality": "HD",
+                                                "language": "Latino",
+                                                "isDirect": false,
+                                                "requiresWebView": true 
+                                            });
+                                        }
+                                    }
+                                } catch(e) { }
                             }
                         }
                     }
@@ -88,10 +90,34 @@ KronosEngine.providers['Cinemitas'] = {
             }
 
         } catch (e) {
-            bridge.log("Error crítico en Cinemitas: " + e.toString());
+            bridge.log("Error Cinemitas: " + e.toString());
         }
-        
         return links;
+    },
+
+    doPostRequest: function(urlStr, params) {
+        try {
+            var url = new java.net.URL(urlStr);
+            var conn = url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+            
+            var os = conn.getOutputStream();
+            var writer = new java.io.OutputStreamWriter(os, "UTF-8");
+            writer.write(params);
+            writer.flush();
+            writer.close();
+            os.close();
+            
+            var is = conn.getInputStream();
+            var scanner = new java.util.Scanner(is, "UTF-8").useDelimiter("\\A");
+            var response = scanner.hasNext() ? scanner.next() : "";
+            is.close();
+            
+            return response;
+        } catch (e) { return null; }
     }
 };
 
