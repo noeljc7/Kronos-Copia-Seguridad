@@ -16,6 +16,10 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import com.kronos.tv.ui.*
 import com.kronos.tv.network.TmdbMovie
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import com.kronos.tv.engine.ScriptEngine
+
 
 enum class ScreenState { 
     HOME, DETAILS, SELECTION, PLAYER, SEARCH, SEASONS, EPISODES, 
@@ -26,7 +30,11 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
+    // INICIALIZAR KRONOS ENGINE
+    lifecycleScope.launch {
+        ScriptEngine.initialize()
+    }
         // --- CAZA ERRORES GLOBAL (CRASH HANDLER) ---
         Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
             Log.e("KronosCrash", "CRASH DETECTADO: ${throwable.message}", throwable)

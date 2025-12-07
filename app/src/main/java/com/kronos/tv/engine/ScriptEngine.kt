@@ -10,7 +10,7 @@ object ScriptEngine {
     private var scope: Scriptable? = null
     
     // CAMBIA ESTO POR TU URL RAW DE GITHUB
-    private const val REMOTE_JS_URL = "https://raw.githubusercontent.com/TU_USUARIO/Kronos-Copia-Seguridad/main/sources.js"
+    private const val REMOTE_JS_URL = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/sources.js"
 
     // 1. INICIALIZAR: Descarga el cerebro
     suspend fun initialize() {
