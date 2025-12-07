@@ -1,7 +1,11 @@
 {
-  "version": 1,
+  "version": 4,
   "scripts": [
-    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/providers/voe.js"
+    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/providers/voe.js",
+    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/providers/cinecanal.js"
+  ],
+  "search_providers": [
+    "Cinecanal"
   ]
 }
 
