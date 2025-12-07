@@ -31,10 +31,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-    // INICIALIZAR KRONOS ENGINE
-    lifecycleScope.launch {
-        ScriptEngine.initialize()
-    }
+            // INICIALIZAR KRONOS ENGINE
+        lifecycleScope.launch {
+            // Usamos la URL RAW de tu repositorio que creamos en el paso anterior
+            val manifestUrl = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/manifest.json"
+            ScriptEngine.initialize(manifestUrl)
+        }
+
         // --- CAZA ERRORES GLOBAL (CRASH HANDLER) ---
         Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
             Log.e("KronosCrash", "CRASH DETECTADO: ${throwable.message}", throwable)

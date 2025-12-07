@@ -6,11 +6,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed // Indexado
+import androidx.compose.foundation.lazy.itemsIndexed 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +30,7 @@ import coil.compose.AsyncImage
 import com.kronos.tv.providers.ProviderManager
 import com.kronos.tv.providers.SourceLink
 import com.kronos.tv.ui.AppLogger
+import kotlinx.coroutines.launch // Importante para la coroutine de resolución
 import java.util.Locale
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -45,8 +45,10 @@ fun SourceSelectionScreen(
     onBack: () -> Unit
 ) {
     var isLoading by remember { mutableStateOf(true) }
+    var isResolving by remember { mutableStateOf(false) } // NUEVO: Estado de resolución
     var links by remember { mutableStateOf(emptyList<SourceLink>()) }
     val manager = remember { ProviderManager() }
+    val scope = rememberCoroutineScope() // Para lanzar tareas en segundo plano
     
     // FOCO INICIAL
     val firstLinkFocus = remember { FocusRequester() }
@@ -60,42 +62,76 @@ fun SourceSelectionScreen(
         try { firstLinkFocus.requestFocus() } catch(e:Exception){}
     }
 
-    Row(modifier = Modifier.fillMaxSize().background(Color(0xFF141414))) {
-        Column(modifier = Modifier.width(350.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.5f)).padding(40.dp), verticalArrangement = Arrangement.Center) {
-            Text(text = title, style = MaterialTheme.typography.displaySmall, color = Color.White, fontWeight = FontWeight.Bold)
-            if (!isMovie) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(text = "Temporada $season - Episodio $episode", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Row(modifier = Modifier.fillMaxSize().background(Color(0xFF141414))) {
+            Column(modifier = Modifier.width(350.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.5f)).padding(40.dp), verticalArrangement = Arrangement.Center) {
+                Text(text = title, style = MaterialTheme.typography.displaySmall, color = Color.White, fontWeight = FontWeight.Bold)
+                if (!isMovie) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(text = "Temporada $season - Episodio $episode", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+                }
+                Spacer(modifier = Modifier.height(40.dp))
+                // Botón Estandarizado
+                NetflixButton(text = "Volver Atrás", icon = Icons.Default.ArrowBack, onClick = onBack)
             }
-            Spacer(modifier = Modifier.height(40.dp))
-            // Botón Estandarizado
-            NetflixButton(text = "Volver Atrás", icon = Icons.Default.ArrowBack, onClick = onBack)
+
+            Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(40.dp), contentAlignment = Alignment.Center) {
+                if (isLoading) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Color(0xFFE50914))
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text("Buscando enlaces...", color = Color.Gray)
+                    }
+                } else if (links.isEmpty()) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = Color(0xFFEF5350), modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("No se encontraron servidores", color = Color.White)
+                    }
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+                        itemsIndexed(links) { index, link ->
+                            val modifier = if (index == 0) Modifier.focusRequester(firstLinkFocus) else Modifier
+                            
+                            SourceCardPremium(
+                                link = link, 
+                                onClick = { 
+                                    // AQUÍ ESTÁ LA MAGIA: Interceptamos el click
+                                    scope.launch {
+                                        isResolving = true // Mostrar Spinner
+                                        
+                                        // Llamamos al Motor JS para intentar sacar el link limpio
+                                        val finalUrl = manager.resolveVideoLink(link.name, link.url)
+                                        
+                                        // Si la URL cambió, significa que el script funcionó -> es directo
+                                        val isNowDirect = finalUrl != link.url || link.isDirect
+                                        
+                                        isResolving = false // Ocultar Spinner
+                                        onLinkSelected(finalUrl, isNowDirect)
+                                    }
+                                },
+                                modifier = modifier
+                            )
+                        }
+                    }
+                }
+            }
         }
 
-        Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(40.dp), contentAlignment = Alignment.Center) {
-            if (isLoading) {
+        // --- OVERLAY DE RESOLUCIÓN (SPINNER) ---
+        if (isResolving) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .clickable(enabled = false) {}, // Bloquear clicks
+                contentAlignment = Alignment.Center
+            ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Color(0xFFE50914))
+                    CircularProgressIndicator(color = Color(0xFFE50914), strokeWidth = 4.dp)
                     Spacer(modifier = Modifier.height(20.dp))
-                    Text("Buscando enlaces...", color = Color.Gray)
-                }
-            } else if (links.isEmpty()) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = Color(0xFFEF5350), modifier = Modifier.size(48.dp))
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text("No se encontraron servidores", color = Color.White)
-                }
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
-                    itemsIndexed(links) { index, link ->
-                        val modifier = if (index == 0) Modifier.focusRequester(firstLinkFocus) else Modifier
-                        
-                        SourceCardPremium(
-                            link = link, 
-                            onClick = { onLinkSelected(link.url, link.isDirect) },
-                            modifier = modifier
-                        )
-                    }
+                    Text("Resolviendo enlace...", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("Usando Motor Kronos", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
