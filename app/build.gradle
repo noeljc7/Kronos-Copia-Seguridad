@@ -72,7 +72,7 @@ dependencies {
     implementation 'androidx.compose.material3:material3:1.2.0'
     implementation 'androidx.media3:media3-datasource-cronet:1.2.0'
     implementation "androidx.media3:media3-exoplayer-hls:1.2.0"
-implementation 'org.mozilla:rhino:1.7.14'
+implementation 'org.mozilla:rhino:1.7.13'
 implementation 'org.jsoup:jsoup:1.15.3'
 
     // --- ICONOS PRO (ESTA ES LA CLAVE) ---
