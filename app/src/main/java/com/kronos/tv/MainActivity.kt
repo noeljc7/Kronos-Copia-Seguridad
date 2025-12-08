@@ -1,25 +1,24 @@
 package com.kronos.tv
 
-import android.content.Intent // <--- ESTA ERA LA IMPORTACIÓN QUE FALTABA
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.tv.material3.Surface
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import com.kronos.tv.ui.*
-import com.kronos.tv.network.TmdbMovie
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Surface
 import com.kronos.tv.engine.ScriptEngine
-
+import com.kronos.tv.network.TmdbMovie
+import com.kronos.tv.ui.*
+import kotlinx.coroutines.launch
 
 enum class ScreenState { 
     HOME, DETAILS, SELECTION, PLAYER, SEARCH, SEASONS, EPISODES, 
@@ -31,11 +30,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-            // INICIALIZAR KRONOS ENGINE
+        // 1. INICIALIZAR EL MOTOR (Arranca el WebView invisible)
+        ScriptEngine.initialize(this)
+
+        // 2. CARGAR SCRIPTS REMOTOS (Descarga cinemitas.js y otros)
         lifecycleScope.launch {
-            // Usamos la URL RAW de tu repositorio que creamos en el paso anterior
             val manifestUrl = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/manifest.json"
-            ScriptEngine.initialize(manifestUrl)
+            ScriptEngine.loadManifest(manifestUrl)
         }
 
         // --- CAZA ERRORES GLOBAL (CRASH HANDLER) ---
