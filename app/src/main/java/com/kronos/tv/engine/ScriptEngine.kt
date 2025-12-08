@@ -1,131 +1,149 @@
 package com.kronos.tv.engine
 
+import android.annotation.SuppressLint
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import org.mozilla.javascript.Context
-import org.mozilla.javascript.Function
-import org.mozilla.javascript.Scriptable
-import org.mozilla.javascript.ScriptableObject
 import java.net.URL
+import kotlin.coroutines.resume
 
 /**
- * EL MOTOR KRONOS (ScriptEngine)
- * Versión 2.0: Soporte para Búsqueda Remota (JsContentProvider)
+ * MOTOR KRONOS V3 (WebView Headless)
+ * Reemplaza Rhino para soportar JS moderno (ES6, Fetch, Cookies)
  */
 object ScriptEngine {
 
-    private var sharedScope: Scriptable? = null
+    private var webView: WebView? = null
     private var isInitialized = false
+    private val uiHandler = Handler(Looper.getMainLooper())
 
     private const val BASE_JS_ENV = "var KronosEngine = KronosEngine || { providers: {} };"
 
-    suspend fun initialize(manifestUrl: String) = withContext(Dispatchers.IO) {
-        if (isInitialized) return@withContext
+    // IMPORTANTE: Llamar a esto en MainActivity.onCreate()
+    fun initialize(context: Context) {
+        if (isInitialized) return
 
-        try {
-            Log.d("KRONOS_ENGINE", "Iniciando Motor Kronos...")
-            val cx = Context.enter()
-            cx.optimizationLevel = -1 
-            
+        uiHandler.post {
             try {
-                sharedScope = cx.initStandardObjects()
-                
-                val bridge = JsBridge()
-                val wrappedBridge = Context.javaToJS(bridge, sharedScope)
-                ScriptableObject.putProperty(sharedScope, "bridge", wrappedBridge)
-
-                cx.evaluateString(sharedScope, BASE_JS_ENV, "CoreEnv", 1, null)
-
-                Log.d("KRONOS_ENGINE", "Descargando manifest...")
-                val manifestContent = URL(manifestUrl).readText()
-                val jsonObject = JSONObject(manifestContent)
-                val scriptsArray = jsonObject.getJSONArray("scripts")
-
-                for (i in 0 until scriptsArray.length()) {
-                    val scriptUrl = scriptsArray.getString(i)
-                    try {
-                        val scriptContent = URL(scriptUrl).readText()
-                        val scriptName = scriptUrl.substringAfterLast("/")
-                        cx.evaluateString(sharedScope, scriptContent, scriptName, 1, null)
-                        Log.d("KRONOS_ENGINE", "Script cargado: $scriptName")
-                    } catch (e: Exception) {
-                        Log.e("KRONOS_ENGINE", "Fallo script $scriptUrl: ${e.message}")
-                    }
-                }
+                webView = WebView(context)
+                setupWebView(webView!!)
                 isInitialized = true
-            } finally {
-                Context.exit()
+                Log.d("KRONOS_ENGINE", "Motor WebView Iniciado 🚀")
+            } catch (e: Exception) {
+                Log.e("KRONOS_ENGINE", "Error iniciando WebView: ${e.message}")
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
-    suspend fun extractLink(providerName: String, videoUrl: String): String? = withContext(Dispatchers.IO) {
-        if (!isInitialized || sharedScope == null) return@withContext null
-        var result: String? = null
-        val cx = Context.enter()
-        cx.optimizationLevel = -1
-        try {
-            val kronosObj = sharedScope?.get("KronosEngine", sharedScope) as? Scriptable
-            val providersObj = kronosObj?.get("providers", sharedScope) as? Scriptable
-            val providerObj = providersObj?.get(providerName, sharedScope) as? Scriptable
-
-            if (providerObj != null) {
-                val extractFunc = providerObj.get("extract", sharedScope)
-                if (extractFunc is Function) {
-                    val jsResult = extractFunc.call(cx, sharedScope, providerObj, arrayOf(videoUrl))
-                    if (jsResult != null && jsResult != org.mozilla.javascript.Undefined.instance) {
-                        result = Context.toString(jsResult)
-                        if (result.isNullOrBlank()) result = null
-                    }
-                }
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun setupWebView(wv: WebView) {
+        val settings = wv.settings
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true // Vital para cookies y localStorage
+        settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
+        
+        // Inyectamos el puente para logs y http legacy
+        wv.addJavascriptInterface(JsBridge(), "bridge")
+        
+        wv.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
+                Log.d("KRONOS_JS_CONSOLE", "${cm?.message()} -- line ${cm?.lineNumber()}")
+                return true
             }
-        } catch (e: Exception) {
-            Log.e("KRONOS_ENGINE", "Error extract ($providerName): ${e.message}")
-        } finally {
-            Context.exit()
         }
-        return@withContext result
+        
+        wv.webViewClient = object : WebViewClient() {}
+        
+        // Inyectar ambiente base
+        wv.evaluateJavascript(BASE_JS_ENV, null)
     }
 
-    /**
-     * NUEVA FUNCIÓN: Consulta a un proveedor de búsqueda remoto.
-     * Devuelve un JSON String con la lista de enlaces encontrados.
-     */
-    suspend fun queryProvider(providerName: String, functionName: String, args: Array<Any>): String? = withContext(Dispatchers.IO) {
-        if (!isInitialized || sharedScope == null) return@withContext "[]"
-
-        var resultJson: String? = "[]"
-        val cx = Context.enter()
-        cx.optimizationLevel = -1
+    // Carga scripts desde una URL (Manifest)
+    suspend fun loadManifest(manifestUrl: String) = withContext(Dispatchers.IO) {
+        if (!isInitialized) {
+            Log.e("KRONOS_ENGINE", "¡Error! Debes llamar a ScriptEngine.initialize(context) primero.")
+            return@withContext
+        }
 
         try {
-            val kronosObj = sharedScope?.get("KronosEngine", sharedScope) as? Scriptable
-            val providersObj = kronosObj?.get("providers", sharedScope) as? Scriptable
-            val providerObj = providersObj?.get(providerName, sharedScope) as? Scriptable
+            Log.d("KRONOS_ENGINE", "Descargando manifest...")
+            val manifestContent = URL(manifestUrl).readText()
+            val jsonObject = JSONObject(manifestContent)
+            val scriptsArray = jsonObject.getJSONArray("scripts")
 
-            if (providerObj != null) {
-                val func = providerObj.get(functionName, sharedScope)
-                if (func is Function) {
-                    val jsResult = func.call(cx, sharedScope, providerObj, args)
-                    
-                    // Usamos JSON.stringify de JS para asegurar formato correcto
-                    val jsonStringer = cx.initStandardObjects().get("JSON", sharedScope) as Scriptable
-                    val stringify = jsonStringer.get("stringify", sharedScope) as Function
-                    val stringified = stringify.call(cx, sharedScope, jsonStringer, arrayOf(jsResult))
-                    
-                    resultJson = Context.toString(stringified)
-                }
+            for (i in 0 until scriptsArray.length()) {
+                val scriptUrl = scriptsArray.getString(i)
+                loadScriptFromUrl(scriptUrl)
             }
         } catch (e: Exception) {
-            Log.e("KRONOS_ENGINE", "Error queryProvider ($providerName): ${e.message}")
-        } finally {
-            Context.exit()
+            Log.e("KRONOS_ENGINE", "Error cargando manifest: ${e.message}")
         }
-        return@withContext resultJson
+    }
+    
+    // Carga un script individual
+    suspend fun loadScriptFromUrl(url: String) {
+        try {
+            val scriptContent = URL(url).readText()
+            withContext(Dispatchers.Main) {
+                webView?.evaluateJavascript(scriptContent, null)
+                Log.d("KRONOS_ENGINE", "Script inyectado: $url")
+            }
+        } catch (e: Exception) {
+            Log.e("KRONOS_ENGINE", "Error inyectando script $url: ${e.message}")
+        }
+    }
+    
+    // Carga script directo (String) - Útil para el de Cinemitas local
+    suspend fun loadScript(jsCode: String) = withContext(Dispatchers.Main) {
+        webView?.evaluateJavascript(jsCode, null)
+    }
+
+    // Ejecuta cualquier código JS y devuelve el resultado como String
+    suspend fun evaluateJs(script: String): String = suspendCancellableCoroutine { cont ->
+        uiHandler.post {
+            val wv = webView
+            if (wv != null) {
+                wv.evaluateJavascript(script) { result ->
+                    // WebView devuelve el string entre comillas (ej: "null" o "\"valor\"")
+                    // Quitamos las comillas extra si es necesario, o devolvemos raw
+                    val cleanResult = if (result != null && result != "null") {
+                        if (result.startsWith("\"") && result.endsWith("\"")) {
+                            result.substring(1, result.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
+                        } else result
+                    } else "null"
+                    
+                    cont.resume(cleanResult)
+                }
+            } else {
+                cont.resume("null")
+            }
+        }
+    }
+
+    // --- MÉTODOS LEGACY (Para compatibilidad con tus Providers viejos) ---
+
+    suspend fun extractLink(providerName: String, videoUrl: String): String? {
+        val jsCode = "KronosEngine.providers['$providerName'].extract('$videoUrl')"
+        val result = evaluateJs(jsCode)
+        return if (result != "null" && result.isNotBlank()) result else null
+    }
+
+    suspend fun queryProvider(providerName: String, functionName: String, args: Array<Any>): String? {
+        // Convertimos args de Kotlin a String JS (ej: ['arg1', 'arg2'])
+        val argsString = args.joinToString(",") { 
+            if (it is String) "'$it'" else it.toString() 
+        }
+        
+        val jsCode = "JSON.stringify(KronosEngine.providers['$providerName'].$functionName($argsString))"
+        return evaluateJs(jsCode)
     }
 }
-
