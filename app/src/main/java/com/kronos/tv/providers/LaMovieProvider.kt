@@ -10,11 +10,17 @@ import java.net.URLEncoder
 import java.util.Locale
 import java.net.URI
 
+// IMPORTANTE: Aseguramos que los modelos se encuentran
+import com.kronos.tv.providers.KronosProvider
+import com.kronos.tv.providers.SourceLink
+
 class LaMovieProvider : KronosProvider {
     override val name = "LaMovie"
+    // Esta propiedad podría ser necesaria si tu interfaz KronosProvider la tiene
+    val language = "Latino" 
+
     private val client = OkHttpClient()
     
-    // Headers copiados de tu la_movie.py
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         "Referer" to "https://la.movie/",
@@ -76,7 +82,6 @@ class LaMovieProvider : KronosProvider {
 
     private fun getPostId(title: String, year: Int, type: String): String? {
         try {
-            // Limpieza básica del título (quitar año si viene pegado)
             val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
             val url = "$API_URL/search?postType=any&q=${URLEncoder.encode(cleanTitle, "UTF-8")}&postsPerPage=5"
             
@@ -90,7 +95,6 @@ class LaMovieProvider : KronosProvider {
                 val item = posts.getJSONObject(i)
                 val itemType = item.optString("type")
                 
-                // Filtro por tipo exacto (movies o tvshows)
                 if (itemType == type) {
                     return item.optString("_id")
                 }
@@ -101,7 +105,6 @@ class LaMovieProvider : KronosProvider {
 
     private fun getEpisodeId(serieId: String, season: Int, episode: Int): String? {
         try {
-            // LaMovie tiene un endpoint para listar episodios de una serie
             val url = "$API_URL/single/episodes/list?_id=$serieId&season=$season&page=1&postsPerPage=50"
             val request = Request.Builder().url(url).headers(headers.toHeaders()).build()
             val response = client.newCall(request).execute()
@@ -111,7 +114,6 @@ class LaMovieProvider : KronosProvider {
             
             for (i in 0 until posts.length()) {
                 val item = posts.getJSONObject(i)
-                // Comparamos números
                 if (item.optInt("episode_number") == episode) {
                     return item.optString("_id")
                 }
@@ -138,26 +140,21 @@ class LaMovieProvider : KronosProvider {
                 val rawLang = item.optString("lang", "")
 
                 if (urlLink.isNotEmpty()) {
-                    // 1. OBTENER NOMBRE REAL (Lógica portada de Python)
                     val realServerName = getServerName(urlLink, rawServer)
-                    
-                    // 2. MAPEAR IDIOMA
                     val prettyLang = mapLanguage(rawLang)
-                    
-                    // 3. MAPEAR CALIDAD (Tu lógica de downgrade para ser honestos)
                     val prettyQuality = if (rawQuality.contains("4k", true)) "4K" else "HD"
 
-                    // 4. CLASIFICAR TIPO DE ENLACE
-                    // Si es MP4/M3U8 es directo. Si es Voe/Filemoon/etc, es Web (Sniffer).
                     val isDirect = urlLink.endsWith(".mp4") || urlLink.endsWith(".m3u8")
 
+                    // CORRECCIÓN: Constructor completo de SourceLink
                     links.add(SourceLink(
                         name = "LM - $realServerName",
                         url = urlLink,
                         quality = prettyQuality,
                         language = prettyLang,
                         isDirect = isDirect,
-                        requiresWebView = !isDirect // Si no es directo, el PlayerScreen usará el Sniffer
+                        requiresWebView = !isDirect,
+                        provider = name
                     ))
                 }
             }
@@ -165,11 +162,9 @@ class LaMovieProvider : KronosProvider {
         return links
     }
 
-    // --- LA LÓGICA DE TU PYTHON TRADUCIDA (Identificador de Servidor) ---
     private fun getServerName(url: String, rawServer: String): String {
         val u = url.lowercase()
         
-        // Detección por URL (Prioritaria)
         if (u.contains("vimeos")) return "Vimeos"
         if (u.contains("goodstream")) return "Goodstream"
         if (u.contains("voe")) return "Voe"
@@ -178,11 +173,9 @@ class LaMovieProvider : KronosProvider {
         if (u.contains("dood")) return "Doodstream"
         if (u.contains("ok.ru")) return "Ok.ru"
         
-        // Si el nombre es genérico ("Online", "Server"), intentamos sacar el dominio
         if (rawServer.equals("Online", true) || rawServer.equals("Server", true)) {
             try {
                 val host = URI(url).host ?: ""
-                // Ejemplo: "www.fembed.com" -> "Fembed"
                 val domain = host.replace("www.", "").split(".")[0]
                 if (domain.isNotEmpty()) {
                     return domain.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
