@@ -26,7 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
-import com.kronos.tv.providers.ProviderManager // Importamos el Singleton
+import com.kronos.tv.providers.ProviderManager 
 import com.kronos.tv.providers.SourceLink
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -46,15 +46,15 @@ fun SourceSelectionScreen(
     var isResolving by remember { mutableStateOf(false) }
     var links by remember { mutableStateOf(emptyList<SourceLink>()) }
     
-    // YA NO INSTANCIAMOS EL MANAGER PORQUE ES UN SINGLETON (OBJECT)
-    // val manager = remember { ProviderManager() } <-- BORRADO
+    // VOLVEMOS A INSTANCIAR COMO CLASE (Tu código original)
+    val manager = remember { ProviderManager() }
     
     val scope = rememberCoroutineScope()
     val firstLinkFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        // Llamada directa al Singleton
-        links = ProviderManager.getLinks(tmdbId, title, isMovie, 0, season, episode)
+        // Llamada a la instancia
+        links = manager.getLinks(tmdbId, title, isMovie, 0, season, episode)
         isLoading = false
         
         kotlinx.coroutines.delay(200)
@@ -63,13 +63,9 @@ fun SourceSelectionScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.fillMaxSize().background(Color(0xFF141414))) {
-            // --- PANEL IZQUIERDO (INFO) ---
+            // PANEL IZQUIERDO
             Column(
-                modifier = Modifier
-                    .width(350.dp)
-                    .fillMaxHeight()
-                    .background(Color.Black.copy(alpha = 0.5f))
-                    .padding(40.dp), 
+                modifier = Modifier.width(350.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.5f)).padding(40.dp), 
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(text = title, style = MaterialTheme.typography.displaySmall, color = Color.White, fontWeight = FontWeight.Bold)
@@ -81,7 +77,7 @@ fun SourceSelectionScreen(
                 NetflixButton(text = "Volver Atrás", icon = Icons.Default.ArrowBack, onClick = onBack)
             }
 
-            // --- PANEL DERECHO (LISTA DE ENLACES) ---
+            // PANEL DERECHO
             Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(40.dp), contentAlignment = Alignment.Center) {
                 if (isLoading) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -104,23 +100,15 @@ fun SourceSelectionScreen(
                                 link = link, 
                                 onClick = { 
                                     scope.launch {
-                                        // Si ya es directo, reproducir de una
                                         if (link.isDirect) {
                                             onLinkSelected(link.url, true)
-                                            return@launch
+                                        } else {
+                                            isResolving = true
+                                            val finalUrl = manager.resolveVideoLink(link.name, link.url)
+                                            kotlinx.coroutines.delay(500)
+                                            isResolving = false
+                                            onLinkSelected(finalUrl, link.isDirect)
                                         }
-
-                                        // Si no, intentar resolver (extraer m3u8 real)
-                                        isResolving = true
-                                        // Aquí podríamos añadir lógica de resolución extra si el ProviderManager lo soporta
-                                        // Por ahora, asumimos que el link que llega ya es reproducible o el WebView lo manejará
-                                        // Si quisieras "resolver" un iframe, aquí llamarías a una función del Manager.
-                                        
-                                        kotlinx.coroutines.delay(500) // Pequeña simulación de carga
-                                        isResolving = false
-                                        
-                                        // Pasamos la URL. El flag 'false' indica que quizás necesite WebView si no es directo.
-                                        onLinkSelected(link.url, link.isDirect)
                                     }
                                 },
                                 modifier = modifier
@@ -131,28 +119,22 @@ fun SourceSelectionScreen(
             }
         }
 
-        // --- OVERLAY DE RESOLUCIÓN (SPINNER BLOQUEANTE) ---
         if (isResolving) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.8f))
-                    .clickable(enabled = false) {}, 
+                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).clickable(enabled = false) {}, 
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Color(0xFFE50914), strokeWidth = 4.dp)
                     Spacer(modifier = Modifier.height(20.dp))
-                    Text("Resolviendo enlace...", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text("Optimizando reproducción", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+                    Text("Resolviendo...", color = Color.White)
                 }
             }
         }
     }
 }
 
-// --- COMPONENTES UI AUXILIARES (IGUAL QUE ANTES) ---
-
+// (Mantén tus funciones auxiliares SourceCardPremium, getFlagUrl, etc. abajo)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SourceCardPremium(link: SourceLink, onClick: () -> Unit, modifier: Modifier = Modifier) {
