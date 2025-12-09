@@ -1,14 +1,12 @@
 package com.kronos.tv.ui
 
-import com.kronos.tv.providers.SourceLink 
-import com.kronos.tv.providers.ProviderManager
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed 
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -28,7 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
-import com.kronos.tv.providers.ProviderManager 
+import com.kronos.tv.providers.ProviderManager
 import com.kronos.tv.providers.SourceLink
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -41,6 +39,7 @@ fun SourceSelectionScreen(
     isMovie: Boolean,
     season: Int,
     episode: Int,
+    providerManager: ProviderManager, // <--- 1. RECIBIMOS LA INSTANCIA AQUÍ
     onLinkSelected: (String, Boolean) -> Unit,
     onBack: () -> Unit
 ) {
@@ -48,15 +47,16 @@ fun SourceSelectionScreen(
     var isResolving by remember { mutableStateOf(false) }
     var links by remember { mutableStateOf(emptyList<SourceLink>()) }
     
-    // VOLVEMOS A INSTANCIAR COMO CLASE (Tu código original)
-    val manager = remember { ProviderManager() }
+    // --- 2. YA NO CREAMOS UNA INSTANCIA NUEVA AQUÍ ---
+    // val manager = remember { ProviderManager() } <-- BORRADO
     
     val scope = rememberCoroutineScope()
     val firstLinkFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        // Llamada a la instancia
-        links = manager.getLinks(tmdbId, title, isMovie, 0, season, episode)
+        // --- 3. USAMOS LA INSTANCIA QUE RECIBIMOS ---
+        // (Usamos providerManager en lugar de manager)
+        links = providerManager.getLinks(tmdbId, title, isMovie, 0, season, episode)
         isLoading = false
         
         kotlinx.coroutines.delay(200)
@@ -106,7 +106,8 @@ fun SourceSelectionScreen(
                                             onLinkSelected(link.url, true)
                                         } else {
                                             isResolving = true
-                                            val finalUrl = manager.resolveVideoLink(link.name, link.url)
+                                            // Usamos providerManager aquí también
+                                            val finalUrl = providerManager.resolveVideoLink(link.name, link.url)
                                             kotlinx.coroutines.delay(500)
                                             isResolving = false
                                             onLinkSelected(finalUrl, link.isDirect)
@@ -136,7 +137,8 @@ fun SourceSelectionScreen(
     }
 }
 
-// (Mantén tus funciones auxiliares SourceCardPremium, getFlagUrl, etc. abajo)
+// --- Componentes Auxiliares (Sin Cambios) ---
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SourceCardPremium(link: SourceLink, onClick: () -> Unit, modifier: Modifier = Modifier) {
