@@ -2,21 +2,19 @@ package com.kronos.tv.engine
 
 import android.webkit.JavascriptInterface
 import org.jsoup.Jsoup
+import android.util.Log
 
 class JsBridge {
     
-    // --- ESTO ES LO NUEVO QUE NECESITAMOS AGREGAR ---
-    // Un "buzón" donde guardaremos la función para avisar a Kotlin
+    // --- SISTEMA DE CALLBACK (EL TELÉFONO ROJO) ---
     var onResultCallback: ((String) -> Unit)? = null
 
-    // Esta función la llamará el JS cuando termine: bridge.onResult(...)
     @JavascriptInterface
     fun onResult(result: String) {
         onResultCallback?.invoke(result)
     }
-    // ------------------------------------------------
+    // ----------------------------------------------
 
-    // GET (Compatible con scripts viejos)
     @JavascriptInterface
     fun fetchHtml(url: String): String {
         return try {
@@ -25,12 +23,9 @@ class JsBridge {
                 .timeout(10000)
                 .get()
                 .html()
-        } catch (e: Exception) {
-            ""
-        }
+        } catch (e: Exception) { "" }
     }
 
-    // POST (Compatible con scripts viejos)
     @JavascriptInterface
     fun post(url: String, data: String): String {
         return try {
@@ -41,15 +36,12 @@ class JsBridge {
                 .requestBody(data)
                 .ignoreContentType(true)
                 .post()
-            
             doc.body().text()
-        } catch (e: Exception) {
-            "{}"
-        }
+        } catch (e: Exception) { "{}" }
     }
 
     @JavascriptInterface
     fun log(message: String) {
-        android.util.Log.d("KRONOS_JS", message)
+        Log.d("KRONOS_JS", message)
     }
 }
