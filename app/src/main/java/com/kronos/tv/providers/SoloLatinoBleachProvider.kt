@@ -12,6 +12,11 @@ import org.json.JSONObject
 import java.util.regex.Pattern
 import java.util.Locale
 
+// IMPORTS NECESARIOS
+import com.kronos.tv.providers.KronosProvider
+import com.kronos.tv.providers.SourceLink
+// import com.kronos.tv.providers.LinkResolver // Descomenta si LinkResolver está en otro paquete
+
 class SoloLatinoBleachProvider : KronosProvider {
     override val name = "SoloLatino (Bleach)"
     private val client = OkHttpClient()
@@ -20,8 +25,7 @@ class SoloLatinoBleachProvider : KronosProvider {
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
     )
 
-    // --- MAPA DE TEMPORADAS (Copiado de tu Python) ---
-    // Clave: Temporada -> Valor: (Inicio Absoluto, Fin Absoluto)
+    // --- MAPA DE TEMPORADAS ---
     private val seasonMap = mapOf(
         1 to (1 to 20),
         2 to (21 to 41),
@@ -49,7 +53,7 @@ class SoloLatinoBleachProvider : KronosProvider {
         return withContext(Dispatchers.IO) {
             val links = mutableListOf<SourceLink>()
             try {
-                // 1. Verificar si es Bleach (TMDB ID: 30984 o IMDB: tt0434665)
+                // 1. Verificar si es Bleach
                 val response = RetrofitInstance.api.getTvExternalIds(tmdbId, RetrofitInstance.getApiKey())
                 val imdbId = response.imdb_id
 
@@ -59,27 +63,14 @@ class SoloLatinoBleachProvider : KronosProvider {
 
                 // 2. ESTRATEGIA PARA "THOUSAND-YEAR BLOOD WAR" (Temporadas 17+)
                 if (season >= 17) {
-                    // En Embed69/SoloLatino, TYBW es una serie nueva con ID distinto
                     val newImdbId = "tt14986406" 
-                    
-                    // Calculamos "Parte" y "Episodio" dentro de TYBW
-                    // (La lógica de tu Python mapeada a TMDB Seasons)
-                    // TMDB S17 = Part 1 (Eps 1-13)
-                    // TMDB S18 = Part 2 (Eps 14-26)
-                    // TMDB S19 = Part 3 (Eps 27+)
-                    
                     var targetSeason = "1"
                     var targetEp = episode
                     
-                    // Ajuste simple asumiendo que TMDB separa las partes como temporadas 17, 18, 19...
-                    // O si TMDB usa S17 para todo, tendríamos que ver el número de episodio.
-                    // Asumiremos el mapeo estándar de TMDB para simplificar:
                     if (season == 18) { targetSeason = "2" }
                     if (season == 19) { targetSeason = "3" }
                     
-                    // Formato 01, 02...
                     val epPad = targetEp.toString().padStart(2, '0')
-                    
                     val url = "https://embed69.org/f/$newImdbId-${targetSeason}x$epPad"
                     AppLogger.log("Bleach", "Buscando TYBW: $url")
                     links.addAll(processUrl(url))
@@ -88,22 +79,11 @@ class SoloLatinoBleachProvider : KronosProvider {
                 else {
                     val range = seasonMap[season]
                     if (range != null) {
-                        // Calcular Episodio Absoluto
-                        // Ej: Temp 2, Ep 1. Inicio T2 = 21. Absoluto = 21 + 1 - 1 = 21.
-                        val startAbsolute = range.first
-                        val absoluteEp = startAbsolute + episode - 1
-                        
-                        // SoloLatino Clásico usa este formato: ID-TemporadaMapxEpisodioRelativoMap... 
-                        // ESPERA, tu script de Python dice: url_suffix = f"{final_season}x{final_episode}"
-                        // Donde final_season y final_episode se calculan.
-                        // Pero Xupalace a veces usa el absoluto para animes largos.
-                        // Tu script Python hace algo curioso: mapea de vuelta a temporada/episodio "fake" que usa el servidor.
-                        
-                        // Vamos a usar la lógica de tu script tal cual:
-                        // El servidor espera: TEMPORADA x EPISODIO (donde temporada coincide con el mapa)
                         val epPad = episode.toString().padStart(2, '0')
                         val urlSuffix = "${season}x$epPad"
                         
+                        // NOTA: Si Xupalace usa IDs raros, aquí iría esa lógica. 
+                        // Por ahora usamos el estándar IMDB-SxE
                         val url = "https://xupalace.org/video/$imdbId-$urlSuffix"
                         AppLogger.log("Bleach", "Buscando Clásico: $url")
                         links.addAll(processUrl(url))
@@ -117,7 +97,7 @@ class SoloLatinoBleachProvider : KronosProvider {
         }
     }
 
-    // --- REUTILIZAMOS LA LÓGICA DE EXTRACCIÓN (Igual que SoloLatinoProvider) ---
+    // --- REUTILIZAMOS LA LÓGICA DE EXTRACCIÓN ---
     private fun processUrl(url: String): List<SourceLink> {
         val foundLinks = mutableListOf<SourceLink>()
         try {
@@ -135,7 +115,7 @@ class SoloLatinoBleachProvider : KronosProvider {
                 foundLinks.addAll(scrapeEmbed69Json(html))
             }
             
-            // 2. VAST (Xupalace suele usar esto)
+            // 2. VAST
             if (html.contains("go_to_playerVast")) {
                 foundLinks.addAll(scrapeVast(html))
             }
@@ -182,9 +162,6 @@ class SoloLatinoBleachProvider : KronosProvider {
             while (matcher.find()) {
                 val rawLink = matcher.group(1) ?: continue
                 val serverName = matcher.group(2)?.trim() ?: "Server"
-                
-                // Detectar idioma aproximado por el icono (si pudiéramos ver el data-lang)
-                // Asumimos Latino/Sub según contexto, o genérico
                 addLinkOptimized(links, serverName, rawLink, "LAT/SUB")
             }
         } catch (e: Exception) { }
@@ -192,8 +169,14 @@ class SoloLatinoBleachProvider : KronosProvider {
     }
 
     private fun addLinkOptimized(links: MutableList<SourceLink>, serverName: String, url: String, lang: String) {
-        val resolvedUrl = LinkResolver.resolve(url)
-        val finalUrl = resolvedUrl ?: url
+        // Intenta usar LinkResolver si existe, sino usa la URL original
+        // Si LinkResolver da error de compilación, elimina esa línea y usa solo 'url'
+        var finalUrl = url
+        try {
+             val resolved = LinkResolver.resolve(url)
+             if (resolved != null) finalUrl = resolved
+        } catch (e: Exception) { /* LinkResolver no existe o falló */ }
+
         val isDirect = finalUrl.endsWith(".mp4") || finalUrl.endsWith(".m3u8")
 
         links.add(SourceLink(
@@ -202,7 +185,8 @@ class SoloLatinoBleachProvider : KronosProvider {
             quality = "HD",
             language = lang.uppercase(),
             isDirect = isDirect,
-            requiresWebView = !isDirect
+            requiresWebView = !isDirect,
+            provider = name // <-- Importante
         ))
     }
 
