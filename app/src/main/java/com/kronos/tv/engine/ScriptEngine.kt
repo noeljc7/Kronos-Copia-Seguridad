@@ -21,8 +21,6 @@ object ScriptEngine {
     private var webView: WebView? = null
     private var isInitialized = false
     private val uiHandler = Handler(Looper.getMainLooper())
-    
-    // Instancia única del puente
     private val bridge = JsBridge() 
 
     private const val BASE_JS_ENV = "var KronosEngine = KronosEngine || { providers: {} };"
@@ -46,89 +44,73 @@ object ScriptEngine {
         val settings = wv.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        // IMPORTANTE: Habilitar acceso total para evitar bloqueos CORS en iframes piratas
+        settings.allowFileAccess = true
+        settings.allowContentAccess = true
+        settings.allowFileAccessFromFileURLs = true
+        settings.allowUniversalAccessFromFileURLs = true
+        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        
         settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
         
         wv.addJavascriptInterface(bridge, "bridge")
         
         wv.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
-                Log.d("KRONOS_JS_CONSOLE", "${cm?.message()} -- line ${cm?.lineNumber()}")
+                if (cm?.message()?.contains("blocked by CORS") == true) return true // Ignorar spam
+                Log.d("KRONOS_JS_CONSOLE", "${cm?.message()}")
                 return true
             }
         }
-        wv.webViewClient = object : WebViewClient() {}
+        wv.webViewClient = object : WebViewClient() {
+            override fun onReceivedSslError(view: WebView?, handler: android.webkit.SslErrorHandler?, error: android.net.http.SslError?) {
+                handler?.proceed() // Ignorar errores SSL en sitios piratas
+            }
+        }
         wv.evaluateJavascript(BASE_JS_ENV, null)
     }
 
     suspend fun loadManifest(manifestUrl: String) = withContext(Dispatchers.IO) {
         if (!isInitialized) return@withContext
         try {
-            val manifestContent = URL(manifestUrl).readText()
-            val jsonObject = JSONObject(manifestContent)
-            val scriptsArray = jsonObject.getJSONArray("scripts")
-            for (i in 0 until scriptsArray.length()) {
-                loadScriptFromUrl(scriptsArray.getString(i))
+            val content = URL(manifestUrl).readText()
+            val json = JSONObject(content)
+            val scripts = json.getJSONArray("scripts")
+            for (i in 0 until scripts.length()) {
+                loadScriptFromUrl(scripts.getString(i))
             }
-        } catch (e: Exception) {
-            Log.e("KRONOS_ENGINE", "Error cargando manifest: ${e.message}")
-        }
+        } catch (e: Exception) {}
     }
     
     suspend fun loadScriptFromUrl(url: String) {
         try {
-            val scriptContent = URL(url).readText()
-            withContext(Dispatchers.Main) {
-                webView?.evaluateJavascript(scriptContent, null)
-                Log.d("KRONOS_ENGINE", "Script inyectado: $url")
-            }
-        } catch (e: Exception) {
-            Log.e("KRONOS_ENGINE", "Error inyectando script $url: ${e.message}")
-        }
+            val content = URL(url).readText()
+            withContext(Dispatchers.Main) { webView?.evaluateJavascript(content, null) }
+        } catch (e: Exception) {}
     }
     
     suspend fun loadScript(jsCode: String) = withContext(Dispatchers.Main) {
         webView?.evaluateJavascript(jsCode, null)
     }
 
-    // Ejecuta JS simple y retorna string inmediato (para compatibilidad)
-    suspend fun evaluateJs(script: String): String = suspendCancellableCoroutine { cont ->
-        uiHandler.post {
-            val wv = webView
-            if (wv != null) {
-                wv.evaluateJavascript(script) { result ->
-                    val cleanResult = if (result != null && result != "null") {
-                        if (result.startsWith("\"") && result.endsWith("\"")) {
-                            result.substring(1, result.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
-                        } else result
-                    } else "null"
-                    cont.resume(cleanResult)
-                }
-            } else {
-                cont.resume("null")
-            }
-        }
-    }
-
-    // --- FUNCIÓN CALLBACK (LA SOLUCIÓN AL {}) ---
+    // --- FUNCIÓN CALLBACK FINAL ---
     suspend fun queryProvider(providerName: String, functionName: String, args: Array<Any>): String? = suspendCancellableCoroutine { cont ->
         val argsString = args.joinToString(",") { 
             if (it is String) "'${it.replace("'", "\\'")}'" else it.toString() 
         }
 
-        // 1. Configuramos el callback
         bridge.onResultCallback = { result ->
             bridge.onResultCallback = null
             if (cont.isActive) cont.resume(result)
         }
 
-        // 2. Inyectamos JS que llama al callback
         val jsCode = """
             (async function() {
                 try {
                     const result = await KronosEngine.providers['$providerName'].$functionName($argsString);
                     bridge.onResult(JSON.stringify(result));
                 } catch(e) {
-                    console.log("JS Error: " + e.message);
+                    bridge.log("JS ERROR: " + e.message);
                     bridge.onResult("[]");
                 }
             })()
@@ -136,11 +118,8 @@ object ScriptEngine {
 
         uiHandler.post {
             val wv = webView
-            if (wv != null) {
-                wv.evaluateJavascript(jsCode, null)
-            } else {
-                if (cont.isActive) cont.resume("[]")
-            }
+            if (wv != null) wv.evaluateJavascript(jsCode, null)
+            else if (cont.isActive) cont.resume("[]")
         }
     }
 }
