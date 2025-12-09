@@ -1,4 +1,4 @@
-// KRONOS PROVIDER: SoloLatino v6.0 (Dooplay Surgical Fix)
+// KRONOS PROVIDER: SoloLatino v7.0 (Safe Return)
 (function() {
     const provider = {
         id: 'sololatino',
@@ -12,7 +12,6 @@
 
         search: async function(query) {
             try {
-                // 1. Preparamos la URL
                 const cleanQuery = encodeURIComponent(query.replace(/[:\-\.]/g, ' '));
                 const searchUrl = this.baseUrl + "/?s=" + cleanQuery;
                 
@@ -29,32 +28,18 @@
                 if (!html || html.length < 100) return [];
 
                 const results = [];
-
-                // --- ESTRATEGIA QUIRÚRGICA (Basada en tu HTML) ---
-                // El HTML usa <article class="item movies"> o "item tvshows"
-                // Buscamos bloques <article ... /article>
-                
-                // Regex para encontrar cada bloque de película/serie individualmente
                 const articleRegex = /<article[^>]*class="item\s+(movies|tvshows)"[^>]*>([\s\S]*?)<\/article>/g;
                 
                 let match;
                 while ((match = articleRegex.exec(html)) !== null) {
-                    const typeFound = match[1]; // "movies" o "tvshows"
-                    const content = match[2]; // El HTML dentro del article
+                    const typeFound = match[1];
+                    const content = match[2];
 
-                    // Extraemos datos DENTRO del bloque encontrado
-                    
-                    // 1. URL
                     const urlMatch = content.match(/href="([^"]+)"/);
                     if (!urlMatch) continue;
                     
-                    // 2. Imagen (Usamos data-srcset porque src es lazy.gif)
                     const imgMatch = content.match(/data-srcset="([^"\s]+)/) || content.match(/src="([^"]+)"/);
-                    
-                    // 3. Título (Está dentro de <h3>)
                     const titleMatch = content.match(/<h3>([^<]+)<\/h3>/);
-                    
-                    // 4. Año (Está dentro de <p>)
                     const yearMatch = content.match(/<p>(\d{4})<\/p>/);
 
                     if (titleMatch) {
@@ -69,8 +54,6 @@
                     }
                 }
 
-                // --- ESTRATEGIA RESPALDO: REDIRECCIÓN ---
-                // (Solo por si acaso WordPress decide redirigir alguna vez)
                 if (results.length === 0) {
                     const canonicalMatch = html.match(/<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']/i);
                     const titleMatch = html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i);
@@ -92,7 +75,11 @@
                     }
                 }
                 
-                bridge.log("JS: Resultados finales: " + results.length);
+                bridge.log("JS: Resultados encontrados: " + results.length);
+                
+                // --- CAMBIO IMPORTANTE: Retorno Seguro ---
+                // No devolvemos el objeto JS directo, devolvemos un array limpio
+                // Esto asegura que el JSON.stringify del puente no falle.
                 return results;
 
             } catch (e) {
@@ -114,7 +101,6 @@
                 
                 const embedHtml = await bridge.fetchHtml(embedUrl);
 
-                // 1. EMBED69 (JWT)
                 if (embedUrl.includes('embed69') || embedHtml.includes('eyJ')) {
                     const jwtRegex = /"link"\s*:\s*"([a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+)"/g;
                     let match;
@@ -126,14 +112,10 @@
                             if (data && data.link) return data.link;
                         } catch (err) {}
                     }
-                } 
-                // 2. XUPALACE
-                else if (embedUrl.includes('xupalace') || embedHtml.includes('go_to_playerVast')) {
+                } else if (embedUrl.includes('xupalace') || embedHtml.includes('go_to_playerVast')) {
                     const match = embedHtml.match(/go_to_playerVast\(['"]([^'"]+)['"]/);
                     if (match) return match[1];
-                }
-                // 3. CLASICO
-                else {
+                } else {
                     const regex = /go_to_player\(['"]([^'"]+)['"]\)/g;
                     let match;
                     while ((match = regex.exec(embedHtml)) !== null) {
@@ -154,5 +136,6 @@
 
     if (typeof KronosEngine !== 'undefined') {
         KronosEngine.providers[provider.id] = provider;
+        console.log("SoloLatino JS Cargado OK");
     }
 })();
