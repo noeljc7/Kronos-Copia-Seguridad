@@ -18,72 +18,99 @@ class JsContentProvider(
     override val language = "Multi"
 
     override suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink> {
-        Log.d("KRONOS", "🎬 Buscando: '$title' ($year)")
+        Log.d("KRONOS", "🎬 Iniciando Operación Búsqueda: '$title' (Original: '$originalTitle') Año: $year")
         
-        // 1. ESTRATEGIA DE BÚSQUEDA (Cascada)
-        // Intentamos Español -> Inglés -> Título Corto
+        // --- FASE 1: Búsqueda en Español (Latino) ---
+        // Ejemplo: Busca "Plan Familiar"
         var results = search(title)
         
+        // --- FASE 2: Búsqueda en Inglés (Fallback) ---
+        // Si la lista está vacía Y el título original es diferente
+        // Ejemplo: Si "Plan Familiar" dio 0 resultados, busca "The Family Plan"
         if (results.isEmpty() && title != originalTitle) {
-            Log.w("KRONOS", "⚠️ Falló búsqueda exacta. Intentando título original: '$originalTitle'")
+            Log.w("KRONOS", "⚠️ Sin resultados en español. Activando Protocolo Inglés: '$originalTitle'")
             results = search(originalTitle)
         }
 
-        // Caso especial Anime/Peliculas largas (Ej: Chainsaw Man: Arc Reze...)
-        // Si falla, buscamos solo las primeras 2-3 palabras clave
-        if (results.isEmpty()) {
-            val shortTitle = simplifyTitle(title)
-            if (shortTitle.length > 3 && shortTitle != title) {
-                Log.w("KRONOS", "⚠️ Falló todo. Intentando búsqueda corta: '$shortTitle'")
+        // --- FASE 3: Búsqueda "Cortada" (Último recurso) ---
+        // Para cosas como "Misión Imposible: Sentencia Mortal..." -> Busca solo "Misión Imposible"
+        if (results.isEmpty() && title.contains(":")) {
+            val shortTitle = title.substringBefore(":").trim()
+            if (shortTitle.length > 3) { 
+                Log.w("KRONOS", "⚠️ Reintentando con título corto: '$shortTitle'")
                 results = search(shortTitle)
             }
         }
 
-        if (results.isEmpty()) return emptyList()
+        if (results.isEmpty()) {
+            Log.e("KRONOS", "❌ Rendición: No se encontró la película.")
+            return emptyList()
+        }
 
-        // 2. SISTEMA DE PUNTUACIÓN (NOMBRE + AÑO)
+        Log.d("KRONOS", "✅ Candidatos encontrados: ${results.size}")
+
+        // --- SELECCIÓN DEL MEJOR CANDIDATO (SISTEMA DE PUNTOS) ---
         val targetEs = normalize(title)
         val targetEn = normalize(originalTitle)
         
         val bestMatch = results.filter { it.type == "movie" }.minByOrNull { candidate ->
             val currentTitle = normalize(candidate.title ?: "")
             
-            // --- PUNTAJE POR NOMBRE (0 a 100) ---
-            var nameScore = 1000 // Peor puntaje inicial
-            if (currentTitle == targetEs || currentTitle == targetEn) nameScore = 0 // Perfecto
+            // 1. PUNTUACIÓN POR NOMBRE (Menos es mejor)
+            var nameScore = 1000 
+            if (currentTitle == targetEs || currentTitle == targetEn) nameScore = 0 // Match perfecto
             else if (currentTitle.contains(targetEs) || targetEs.contains(currentTitle)) nameScore = 10
             else if (currentTitle.contains(targetEn) || targetEn.contains(currentTitle)) nameScore = 10
             
-            // --- PUNTAJE POR AÑO (Vital para remakes o animes) ---
+            // 2. PUNTUACIÓN POR AÑO (Vital para Chainsaw Man / Remakes)
             var yearScore = 0
             val candidateYear = candidate.year?.toIntOrNull() ?: 0
             
+            // Solo evaluamos año si tenemos datos válidos (> 0)
             if (year > 0 && candidateYear > 0) {
                 val diff = abs(year - candidateYear)
                 yearScore = when (diff) {
-                    0 -> 0   // Mismo año (Perfecto)
-                    1 -> 5   // 1 año de diferencia (Aceptable, a veces pasa por fechas de estreno)
+                    0 -> 0   // Mismo año
+                    1 -> 5   // 1 año de diferencia (Aceptable)
                     2 -> 50  // 2 años (Sospechoso)
-                    else -> 500 // Muy lejos (Probablemente es otra peli con mismo nombre)
+                    else -> 500 // ¡Demasiada diferencia! Penalización masiva
                 }
             }
 
-            // Puntaje Final (Menos es mejor)
             nameScore + yearScore
         }
 
-        // Filtro de Calidad: Si el puntaje es muy alto (>400), es que el año no cuadró nada
+        // Filtro de seguridad
         if (bestMatch == null) return emptyList()
         
-        // Log para depurar qué eligió
-        Log.d("KRONOS", "🎯 Ganador: '${bestMatch.title}' (${bestMatch.year}) vs Esperado: $year")
+        Log.d("KRONOS", "🎯 Ganador Elegido: '${bestMatch.title}' (${bestMatch.year})")
 
-        // 3. EXTRAER SERVIDORES
+        // --- EXTRACCIÓN DE SERVIDORES ---
         val jsonServers = loadStream(bestMatch.id, "movie") ?: "[]"
-        return parseServers(jsonServers)
-    }
+        val links = mutableListOf<SourceLink>()
+        
+        try {
+            val array = JSONArray(jsonServers)
+            for (i in 0 until array.length()) {
+                val s = array.getJSONObject(i)
+                
+                // Filtro extra de seguridad anti-descargas
+                val sName = s.optString("server", "Server")
+                if (sName.lowercase().contains("download")) continue
 
-    // ... (El resto de métodos getEpisodeLinks, search, etc. siguen igual) ...
+                links.add(SourceLink(
+                    name = sName,
+                    url = s.optString("url"),
+                    quality = "HD",
+                    language = s.optString("lang", "Latino"),
+                    provider = displayName,
+                    isDirect = true
+                ))
+            }
+        } catch (e: Exception) { Log.e("KRONOS", "Error servers: $e") }
+
+        return links
+    }
 
     override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
         return emptyList()
@@ -94,12 +121,6 @@ class JsContentProvider(
             .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
             .lowercase()
             .replace(Regex("[^a-z0-9]"), "")
-    }
-
-    // Nueva función para simplificar títulos largos
-    // Ej: "Chainsaw Man: The Movie - Reze Arc" -> "Chainsaw Man"
-    private fun simplifyTitle(title: String): String {
-        return title.split(":")[0].split("-")[0].trim()
     }
 
     override suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
@@ -127,31 +148,10 @@ class JsContentProvider(
                     img = obj.optString("img"),
                     id = obj.optString("id"),
                     type = obj.optString("type"),
-                    // ¡IMPORTANTE! Asegúrate de que el modelo SearchResult tenga el campo 'year'
-                    // Si no lo tiene, agrégalo a tu data class SearchResult o usa un campo temporal
-                    year = obj.optString("year") 
+                    year = obj.optString("year") // ¡Este campo es vital para el filtro de año!
                 ))
             }
         } catch (e: Exception) { }
         return list
-    }
-
-    private fun parseServers(jsonServers: String): List<SourceLink> {
-        val links = mutableListOf<SourceLink>()
-        try {
-            val array = JSONArray(jsonServers)
-            for (i in 0 until array.length()) {
-                val s = array.getJSONObject(i)
-                links.add(SourceLink(
-                    name = s.optString("server", "Server"),
-                    url = s.optString("url"),
-                    quality = "HD",
-                    language = s.optString("lang", "Latino"),
-                    provider = displayName,
-                    isDirect = true
-                ))
-            }
-        } catch (e: Exception) {}
-        return links
     }
 }
