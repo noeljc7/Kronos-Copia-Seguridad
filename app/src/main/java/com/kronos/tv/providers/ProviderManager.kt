@@ -26,13 +26,8 @@ data class SourceLink(
 class ProviderManager(private val context: Context) {
 
     // Lista de proveedores locales (siempre disponibles)
-    private val providers = mutableListOf<KronosProvider>(
-        SoloLatinoOnePieceProvider(),
-        SoloLatinoBleachProvider(),
-        SoloLatinoProvider(),
-        LaMovieProvider(),
-        ZonaApsProvider()
-    )
+    // Lista vacía al inicio. Se llenará SOLO con el JS.
+private val providers = mutableListOf<KronosProvider>()
 
     companion object {
         val remoteProviders = mutableListOf<KronosProvider>()
