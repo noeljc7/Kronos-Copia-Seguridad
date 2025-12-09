@@ -17,74 +17,100 @@ class JsContentProvider(
 
     override val language = "Multi"
 
+    // --- PELÍCULAS (Ya funciona perfecto) ---
     override suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink> {
-        Log.d("KRONOS", "🎬 Buscando: '$title' ($year) | Original: '$originalTitle'")
+        val bestMatch = findBestMatch(title, originalTitle, year, "movie") ?: return emptyList()
+        Log.d("KRONOS", "🎯 Película Ganadora: '${bestMatch.title}'")
         
-        // FASE 1: Español
-        var results = search(title)
-        
-        // FASE 2: Inglés (Fallback)
-        if (results.isEmpty() && title != originalTitle) {
-            Log.w("KRONOS", "⚠️ Sin resultados ES. Probando EN: '$originalTitle'")
-            results = search(originalTitle)
-        }
-
-        // FASE 3: Búsqueda Corta (Chainsaw Man strategy)
-        if (results.isEmpty() && title.contains(":")) {
-            val shortTitle = title.substringBefore(":").trim()
-            if (shortTitle.length > 3) {
-                Log.w("KRONOS", "⚠️ Probando título corto: '$shortTitle'")
-                results = search(shortTitle)
-            }
-        }
-
-        if (results.isEmpty()) return emptyList()
-
-        // SELECCIÓN INTELIGENTE
-        val targetEs = normalize(title)
-        val targetEn = normalize(originalTitle)
-        
-        val bestMatch = results.filter { it.type == "movie" }.minByOrNull { cand ->
-            val current = normalize(cand.title ?: "")
-            val cYear = cand.year?.toIntOrNull() ?: 0
-            
-            var score = 1000
-            // Nombre
-            if (current == targetEs || current == targetEn) score = 0
-            else if (current.contains(targetEs) || targetEs.contains(current)) score = 10
-            else if (current.contains(targetEn) || targetEn.contains(current)) score = 10
-            
-            // Año (Filtro Chainsaw Man / Remakes)
-            if (year > 0 && cYear > 0) {
-                val diff = abs(year - cYear)
-                score += when (diff) {
-                    0 -> 0
-                    1 -> 5
-                    else -> 500 // Penalización fatal
-                }
-            }
-            score
-        }
-
-        if (bestMatch == null) return emptyList()
-        
-        // Validación final de año
-        val winYear = bestMatch.year?.toIntOrNull() ?: 0
-        if (year > 0 && winYear > 0 && abs(year - winYear) > 2) {
-            Log.w("KRONOS", "⛔ BLOQUEADO por Año: Buscado $year vs Encontrado $winYear")
-            return emptyList()
-        }
-
-        Log.d("KRONOS", "🎯 Ganador: '${bestMatch.title}'")
-
         val jsonServers = loadStream(bestMatch.id, "movie") ?: "[]"
         return parseServers(jsonServers)
     }
 
+    // --- SERIES (NUEVA LÓGICA) ---
     override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
-        return emptyList() // Pendiente para la siguiente fase
+        // 1. Buscamos la SERIE primero (Usamos año 0 o el real si lo tienes, pero el nombre suele bastar)
+        // Nota: Para series, el año es 'first_air_date', a veces es mejor ser flexible con el año en series.
+        Log.d("KRONOS", "📺 Buscando Serie: '$showTitle' T$season E$episode")
+        
+        val bestMatch = findBestMatch(showTitle, showTitle, 0, "tv") 
+        
+        if (bestMatch == null) {
+            Log.e("KRONOS", "❌ No se encontró la serie: $showTitle")
+            return emptyList()
+        }
+
+        Log.d("KRONOS", "✅ Serie Encontrada: '${bestMatch.title}'. Buscando episodio...")
+
+        // 2. Pedimos al JS que busque el episodio DENTRO de la página de la serie
+        // Le pasamos la URL de la serie y los números de S y E
+        val jsonServers = loadEpisodeStream(bestMatch.id, season, episode) ?: "[]"
+        
+        return parseServers(jsonServers)
     }
 
+    // --- LÓGICA DE BÚSQUEDA CENTRALIZADA (Reutilizable) ---
+    private suspend fun findBestMatch(title: String, originalTitle: String, year: Int, type: String): SearchResult? {
+        // FASE 1: Español
+        var results = search(title)
+        
+        // FASE 2: Inglés
+        if (results.isEmpty() && title != originalTitle) {
+            results = search(originalTitle)
+        }
+
+        // FASE 3: Corta
+        if (results.isEmpty() && title.contains(":")) {
+            val shortTitle = title.substringBefore(":").trim()
+            if (shortTitle.length > 3) results = search(shortTitle)
+        }
+
+        if (results.isEmpty()) return null
+
+        // FILTRADO INTELIGENTE
+        val targetEs = normalize(title)
+        val targetEn = normalize(originalTitle)
+        
+        return results.filter { it.type == type }.minByOrNull { cand ->
+            val current = normalize(cand.title ?: "")
+            val cYear = cand.year?.toIntOrNull() ?: 0
+            
+            var score = 1000
+            if (current == targetEs || current == targetEn) score = 0
+            else if (current.contains(targetEs) || targetEs.contains(current)) score = 10
+            else if (current.contains(targetEn) || targetEn.contains(current)) score = 10
+            
+            // Filtro de año (Solo si se provee y es válido)
+            if (year > 0 && cYear > 0) {
+                val diff = abs(year - cYear)
+                score += when (diff) {
+                    0 -> 0; 1 -> 5; else -> 500
+                }
+            }
+            score
+        }
+    }
+
+    // --- PUENTES CON JS ---
+
+    private suspend fun loadEpisodeStream(url: String, season: Int, episode: Int): String? = withContext(Dispatchers.IO) {
+        // Nueva función en JS para episodios
+        val res = ScriptEngine.queryProvider(name, "resolveEpisode", arrayOf(url, season, episode))
+        return@withContext if (res != "null" && res != null) res.trim() else null
+    }
+
+    override suspend fun loadStream(id: String, type: String): String? = withContext(Dispatchers.IO) {
+        val res = ScriptEngine.queryProvider(name, "resolveVideo", arrayOf(id, type))
+        return@withContext if (res != "null" && res != null) res.trim() else null
+    }
+
+    override suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
+        val json = ScriptEngine.queryProvider(name, "search", arrayOf(query))
+        return@withContext parseResults(json ?: "[]")
+    }
+
+    // ... (Resto de métodos auxiliares iguales: parseServers, normalize, parseResults, loadEpisodes) ...
+    // Asegúrate de incluir parseServers, normalize, etc. del código anterior.
+    
     private fun parseServers(json: String): List<SourceLink> {
         val links = mutableListOf<SourceLink>()
         try {
@@ -92,10 +118,7 @@ class JsContentProvider(
             for (i in 0 until array.length()) {
                 val s = array.getJSONObject(i)
                 val rawName = s.optString("server", "Server")
-                // Capitalizar nombre (waaw -> Waaw)
                 val sName = rawName.replaceFirstChar { it.uppercase() } 
-                
-                // Detectar si requiere WebView (evitar error CORS/Player en Exo)
                 val isWeb = sName.contains("Waaw") || sName.contains("Filemoon") || sName.contains("Voe") || sName.contains("Streamwish")
                 
                 links.add(SourceLink(
@@ -112,19 +135,8 @@ class JsContentProvider(
         return links
     }
 
-    // --- UTILS ---
     private fun normalize(str: String): String = Normalizer.normalize(str, Normalizer.Form.NFD)
         .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "").lowercase().replace(Regex("[^a-z0-9]"), "")
-
-    override suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
-        val json = ScriptEngine.queryProvider(name, "search", arrayOf(query))
-        return@withContext parseResults(json ?: "[]")
-    }
-    
-    override suspend fun loadStream(id: String, type: String): String? = withContext(Dispatchers.IO) {
-        val res = ScriptEngine.queryProvider(name, "resolveVideo", arrayOf(id, type))
-        return@withContext if (res != "null" && res != null) res.trim() else null
-    }
 
     override suspend fun loadEpisodes(url: String): List<Episode> = emptyList() 
 
