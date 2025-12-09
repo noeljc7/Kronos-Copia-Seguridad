@@ -1,112 +1,90 @@
 package com.kronos.tv.providers
 
-import android.util.Log
 import com.kronos.tv.engine.ScriptEngine
-import com.kronos.tv.models.SourceLink // Asegúrate de tener este modelo
+import com.kronos.tv.models.SearchResult
+import com.kronos.tv.models.Episode
+import com.kronos.tv.models.SourceLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.URL
+import org.json.JSONArray
 
-object ProviderManager { // <--- AHORA ES UN SINGLETON
+class JsContentProvider(
+    override val name: String,
+    private val displayName: String
+) : Provider() {
 
-    // Lista de proveedores (Locales + Remotos)
-    // Usamos 'mutableListOf' para poder agregar los que vienen de GitHub
-    val providers = mutableListOf<Provider>(
-        SoloLatinoOnePieceProvider(),
-        SoloLatinoBleachProvider(),
-        SoloLatinoProvider(),
-        LaMovieProvider(),
-        ZonaApsProvider()
-        // Los de Javascript se agregarán aquí dinámicamente
-    )
+    override val language = "Multi"
 
-    private var isRemoteLoaded = false
+    // --- IMPLEMENTACIÓN ANTIGUA (Compatibilidad con tu App) ---
 
-    /**
-     * PASO 1: Carga proveedores dinámicos desde GitHub.
-     * Esto se llama DESDE MainActivity al iniciar la app.
-     */
-    suspend fun loadRemoteProviders(manifestUrl: String) = withContext(Dispatchers.IO) {
-        if (isRemoteLoaded) return@withContext // Si ya cargaron, no hacemos nada
+    override suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink> {
+        // 1. Buscamos la película en el sitio JS usando el título
+        val results = search(title)
+        
+        // 2. Filtramos para encontrar la correcta (coincidencia de año o título exacto)
+        // (Por simplicidad tomamos la primera que parezca película)
+        val bestMatch = results.firstOrNull { it.type == "movie" } ?: return emptyList()
 
-        try {
-            Log.d("KRONOS_MANAGER", "Descargando configuración remota...")
-            val jsonStr = URL(manifestUrl).readText()
-            val json = JSONObject(jsonStr)
-            
-            // 1. Cargar Scripts JS en el Motor (WebView)
-            if (json.has("scripts")) {
-                val scripts = json.getJSONArray("scripts")
-                for (i in 0 until scripts.length()) {
-                    ScriptEngine.loadScriptFromUrl(scripts.getString(i))
-                }
-            }
-
-            // 2. Registrar los Proveedores en Kotlin
-            if (json.has("providers")) {
-                val remoteList = json.getJSONArray("providers")
-                for (i in 0 until remoteList.length()) {
-                    // El JSON ahora debería ser objetos: {"id": "Cinemitas", "name": "Cinemitas HD"}
-                    val p = remoteList.getJSONObject(i)
-                    val id = p.getString("id")
-                    val name = p.getString("name")
-
-                    // Evitar duplicados
-                    if (providers.none { it.name == id }) {
-                        providers.add(JsContentProvider(id, name))
-                        Log.d("KRONOS_MANAGER", "Proveedor remoto agregado: $name")
-                    }
-                }
-            }
-            isRemoteLoaded = true
-        } catch (e: Exception) {
-            Log.e("KRONOS_MANAGER", "Error cargando remotos: ${e.message}")
+        // 3. Extraemos el link de video
+        val videoUrl = loadStream(bestMatch.id, "movie")
+        
+        return if (videoUrl != null) {
+            listOf(SourceLink(
+                name = "$displayName (JS)",
+                url = videoUrl,
+                quality = "720p",
+                language = "Latino",
+                isDirect = true, // Es m3u8 directo
+                requiresWebView = false
+            ))
+        } else {
+            emptyList()
         }
     }
 
-    /**
-     * PASO 2: Buscar enlaces.
-     * Ahora es ultrarrápido porque no descarga nada, solo itera la lista.
-     */
-    suspend fun getLinks(
-        tmdbId: Int, 
-        title: String, 
-        isMovie: Boolean, 
-        year: Int = 0, 
-        season: Int = 0, 
-        episode: Int = 0
-    ): List<SourceLink> = withContext(Dispatchers.IO) {
-        
-        val allLinks = mutableListOf<SourceLink>()
-        
-        Log.d("KRONOS_MANAGER", "Buscando en ${providers.size} proveedores...")
+    override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
+        // 1. Buscamos la serie
+        val results = search(showTitle)
+        val series = results.firstOrNull { it.type == "tv" } ?: return emptyList()
 
-        // Ejecutar búsqueda en paralelo o secuencial (aquí secuencial por seguridad)
-        for (provider in providers) {
-            try {
-                // Decidir si buscar peli o episodio
-                if (isMovie) {
-                    // Asumiendo que tu interfaz Provider tiene getMovieLinks
-                    // Si tu Provider base es distinto, ajusta esta llamada
-                    val links = provider.search(title) // O el método que uses para buscar
-                    // Convertir SearchResult a SourceLink si es necesario
-                    // ... lógica de conversión ...
-                } else {
-                    // Lógica para episodios
-                    if (provider is JsContentProvider) {
-                       // Lógica especial JS si es necesario
-                    }
-                }
-                
-                // NOTA: Para simplificar, si tus providers ya retornan SourceLink:
-                // allLinks.addAll(provider.getLinks(...))
-                
-            } catch (e: Exception) {
-                Log.e("KRONOS_MANAGER", "Error en provider ${provider.name}: ${e.message}")
+        // 2. Cargamos episodios (necesitamos un método nuevo en JS para esto, o asumir URL)
+        // Para simplificar, intentaremos resolver asumiendo que el script JS maneja la lógica
+        // Si tu script JS tiene "getEpisodes", deberíamos llamarlo aquí.
+        // Por ahora, retornamos vacío hasta que implementemos la lógica completa de series.
+        return emptyList()
+    }
+
+    // --- MÉTODOS INTERNOS NUEVOS (Llamadas al JS) ---
+
+    override suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
+        val json = ScriptEngine.queryProvider(name, "search", arrayOf(query))
+        return@withContext parseResults(json ?: "[]")
+    }
+    
+    // Añadimos este para cumplir con la clase abstracta
+    override suspend fun loadEpisodes(url: String): List<Episode> = emptyList() 
+
+    override suspend fun loadStream(id: String, type: String): String? = withContext(Dispatchers.IO) {
+        val res = ScriptEngine.queryProvider(name, "resolveVideo", arrayOf(id, type))
+        return@withContext if (res != "null" && res != null) res.replace("\"", "") else null
+    }
+
+    // --- PARSERS ---
+    private fun parseResults(json: String): List<SearchResult> {
+        val list = mutableListOf<SearchResult>()
+        try {
+            val array = JSONArray(json)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(SearchResult(
+                    title = obj.optString("title"),
+                    url = obj.optString("url"),
+                    img = obj.optString("img"),
+                    id = obj.optString("id"),
+                    type = obj.optString("type")
+                ))
             }
-        }
-
-        return@withContext allLinks.sortedBy { it.quality } // Ordenar por calidad
+        } catch (e: Exception) { e.printStackTrace() }
+        return list
     }
 }
