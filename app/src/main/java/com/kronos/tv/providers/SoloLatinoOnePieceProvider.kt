@@ -12,6 +12,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 
+// IMPORTS CLAVE QUE FALTABAN O PODRÍAN CAUSAR CONFUSIÓN
+import com.kronos.tv.providers.KronosProvider
+import com.kronos.tv.providers.SourceLink
+
 class SoloLatinoOnePieceProvider : KronosProvider {
     override val name = "SoloLatino (One Piece)"
     private val client = OkHttpClient()
@@ -23,7 +27,7 @@ class SoloLatinoOnePieceProvider : KronosProvider {
         "X-Requested-With" to "XMLHttpRequest"
     )
 
-    // MAPA DE EPISODIOS (Copiado de tu Python)
+    // MAPA DE EPISODIOS
     private val seasonStartMap = mapOf(
         1 to 1, 2 to 62, 3 to 78, 4 to 93, 5 to 131, 6 to 144, 7 to 196, 8 to 207, 
         9 to 229, 10 to 264, 11 to 385, 12 to 408, 13 to 422, 14 to 459, 15 to 517, 
@@ -53,7 +57,7 @@ class SoloLatinoOnePieceProvider : KronosProvider {
                     return@withContext emptyList()
                 }
 
-                // 3. Construir URL (Forzamos temporada 1xEpisodioAbsoluto)
+                // 3. Construir URL
                 val targetUrl = "https://embed69.org/f/$imdbId-1x$absoluteEpisode"
                 AppLogger.log("OnePiece", "Objetivo: $targetUrl")
 
@@ -68,15 +72,12 @@ class SoloLatinoOnePieceProvider : KronosProvider {
     }
 
     private fun getAbsoluteEpisode(season: Int, episode: Int): String? {
-        // Si la temporada está en el mapa, calculamos
         if (seasonStartMap.containsKey(season)) {
             val start = seasonStartMap[season]!!
             val abs = start + (episode - 1)
             return abs.toString()
         }
-        // Si es temporada 1, devolvemos directo
         if (season == 1) return episode.toString()
-        
         return null
     }
 
@@ -144,16 +145,17 @@ class SoloLatinoOnePieceProvider : KronosProvider {
                         val lang = mapLanguage(info["lang"] ?: "UNK")
                         val serverName = info["server"]?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() } ?: "Server"
                         
-                        // Verificar si es directo
                         val isDirect = realUrl.endsWith(".mp4") || realUrl.endsWith(".m3u8")
 
+                        // CORRECCIÓN CLAVE AQUÍ: Usamos el constructor completo de SourceLink
                         links.add(SourceLink(
                             name = "OP - $serverName",
                             url = realUrl,
                             quality = "HD",
                             language = lang,
                             isDirect = isDirect,
-                            requiresWebView = !isDirect
+                            requiresWebView = !isDirect,
+                            provider = name // Añadimos el nombre del proveedor
                         ))
                     }
                 }
