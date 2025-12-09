@@ -10,6 +10,10 @@ import java.net.URLEncoder
 import java.util.regex.Pattern
 import java.util.Locale
 
+// IMPORTS NECESARIOS
+import com.kronos.tv.providers.KronosProvider
+import com.kronos.tv.providers.SourceLink
+
 class ZonaApsProvider : KronosProvider {
     override val name = "ZonaAps"
     private val client = OkHttpClient()
@@ -98,13 +102,15 @@ class ZonaApsProvider : KronosProvider {
         // Limpiar nombre
         val prettyServer = serverName.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
 
+        // AQUÍ ESTÁ LA CORRECCIÓN: Constructor Completo
         links.add(SourceLink(
             name = "ZA - $prettyServer",
             url = url,
             quality = "HD",
             language = lang,
             isDirect = isDirect,
-            requiresWebView = !isDirect // El Sniffer se encargará de extraer el video del PHP
+            requiresWebView = !isDirect, // El Sniffer se encargará de extraer el video del PHP
+            provider = name // Añadimos el nombre del proveedor
         ))
     }
 
