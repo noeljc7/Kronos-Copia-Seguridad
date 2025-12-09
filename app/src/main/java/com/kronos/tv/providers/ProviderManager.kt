@@ -2,7 +2,7 @@ package com.kronos.tv.providers
 
 import android.util.Log
 import com.kronos.tv.engine.ScriptEngine
-import com.kronos.tv.models.SourceLink
+import com.kronos.tv.providers.SourceLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
