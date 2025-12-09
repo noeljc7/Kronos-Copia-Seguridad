@@ -1,57 +1,68 @@
 package com.kronos.tv.providers
 
 import com.kronos.tv.engine.ScriptEngine
+import com.kronos.tv.models.SearchResult
+import com.kronos.tv.models.Episode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
-import org.json.JSONObject
 
-class JsContentProvider(override val name: String) : KronosProvider {
+// Este proveedor sirve para CUALQUIER script remoto (Cinemitas, AnimeFLV, etc.)
+class JsContentProvider(
+    override val name: String,     // El ID en el JS (ej: "Cinemitas")
+    private val displayName: String // El nombre bonito (ej: "Cinemitas Movies")
+) : Provider() {
 
-    override suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink> {
-        // Empaquetamos los datos de TMDB en un JSON para el script JS
-        val metadata = JSONObject()
-        metadata.put("tmdbId", tmdbId)
-        metadata.put("title", title)
-        metadata.put("originalTitle", originalTitle)
-        metadata.put("year", year)
-        metadata.put("type", "movie")
+    override val language = "Multi"
 
-        // Llamamos al script remoto
-        val jsonResult = ScriptEngine.queryProvider(name, "getLinks", arrayOf(metadata.toString()))
-        return parseJsonToLinks(jsonResult)
+    override suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
+        // Llama a: KronosEngine.providers['Cinemitas'].search('Batman')
+        val json = ScriptEngine.queryProvider(name, "search", arrayOf(query))
+        return@withContext parseResults(json ?: "[]")
     }
 
-    override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
-        val metadata = JSONObject()
-        metadata.put("tmdbId", tmdbId)
-        metadata.put("title", showTitle)
-        metadata.put("season", season)
-        metadata.put("episode", episode)
-        metadata.put("type", "tv")
-
-        val jsonResult = ScriptEngine.queryProvider(name, "getLinks", arrayOf(metadata.toString()))
-        return parseJsonToLinks(jsonResult)
+    override suspend fun loadEpisodes(url: String): List<Episode> = withContext(Dispatchers.IO) {
+        val json = ScriptEngine.queryProvider(name, "getEpisodes", arrayOf(url))
+        return@withContext parseEpisodes(json ?: "[]")
     }
 
-    private fun parseJsonToLinks(jsonStr: String?): List<SourceLink> {
-        val list = mutableListOf<SourceLink>()
-        if (jsonStr.isNullOrBlank()) return list
+    override suspend fun loadStream(id: String, type: String): String? = withContext(Dispatchers.IO) {
+        val res = ScriptEngine.queryProvider(name, "resolveVideo", arrayOf(id, type))
+        // El queryProvider devuelve un string JSON ("url"), limpiamos comillas
+        return@withContext if (res != "null" && res != null) res.replace("\"", "") else null
+    }
 
+    // --- PARSERS GENÉRICOS ---
+    private fun parseResults(json: String): List<SearchResult> {
+        val list = mutableListOf<SearchResult>()
         try {
-            val jsonArray = JSONArray(jsonStr)
-            for (i in 0 until jsonArray.length()) {
-                val obj = jsonArray.getJSONObject(i)
-                list.add(SourceLink(
-                    name = obj.optString("name", name),
-                    url = obj.getString("url"),
-                    quality = obj.optString("quality", "HD"),
-                    language = obj.optString("language", "Unknown"),
-                    isDirect = obj.optBoolean("isDirect", false),
-                    requiresWebView = !obj.optBoolean("isDirect", false)
+            val array = JSONArray(json)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(SearchResult(
+                    title = obj.optString("title"),
+                    url = obj.optString("url"),
+                    posterUrl = obj.optString("img"),
+                    id = obj.optString("id"),
+                    type = obj.optString("type")
                 ))
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { }
+        return list
+    }
+
+    private fun parseEpisodes(json: String): List<Episode> {
+        val list = mutableListOf<Episode>()
+        try {
+            val array = JSONArray(json)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(Episode(
+                    name = obj.optString("title"),
+                    url = obj.optString("url")
+                ))
+            }
+        } catch (e: Exception) { }
         return list
     }
 }
