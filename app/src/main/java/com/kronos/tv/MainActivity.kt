@@ -37,13 +37,12 @@ class MainActivity : ComponentActivity() {
         // 2. INSTANCIAR EL GESTOR DE PROVEEDORES (Aquí está el val que faltaba)
         // Al hacer esto, se dispara el 'init' y carga 'sololatino.js' desde assets
         val providerManager = ProviderManager(this)
-
-        // 3. CARGAR PROVEEDORES REMOTOS (Sigue funcionando estático para la descarga)
+/*
         lifecycleScope.launch {
             val manifestUrl = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/manifest.json"
             ProviderManager.loadRemoteProviders(manifestUrl)
         }
-
+*/
         // --- CRASH HANDLER ---
         Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
             Log.e("KronosCrash", "CRASH DETECTADO: ${throwable.message}", throwable)
