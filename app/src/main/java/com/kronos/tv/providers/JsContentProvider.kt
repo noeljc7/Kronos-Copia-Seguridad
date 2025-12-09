@@ -84,7 +84,7 @@ class JsContentProvider(
         val list = mutableListOf<SearchResult>()
         try {
             // Si el JS devuelve HTML de error en vez de JSON, esto explotará y lo veremos en los logs
-            val array = JSONArray(json)
+            val array = if (json.trim().startsWith("{")) JSONArray("[]") else JSONArray(json)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
                 list.add(SearchResult(
