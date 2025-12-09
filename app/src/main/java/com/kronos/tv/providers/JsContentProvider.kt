@@ -47,43 +47,55 @@ class JsContentProvider(
             return emptyList()
         }
 
+        // ... (código anterior de búsqueda) ...
+
         Log.d("KRONOS", "✅ Candidatos encontrados: ${results.size}")
 
-        // --- SELECCIÓN DEL MEJOR CANDIDATO (SISTEMA DE PUNTOS) ---
+        // --- SELECCIÓN DEL MEJOR CANDIDATO ---
         val targetEs = normalize(title)
         val targetEn = normalize(originalTitle)
         
         val bestMatch = results.filter { it.type == "movie" }.minByOrNull { candidate ->
             val currentTitle = normalize(candidate.title ?: "")
+            val candidateYear = candidate.year?.toIntOrNull() ?: 0
             
-            // 1. PUNTUACIÓN POR NOMBRE (Menos es mejor)
-            var nameScore = 1000 
-            if (currentTitle == targetEs || currentTitle == targetEn) nameScore = 0 // Match perfecto
+            // 1. Nombre
+            var nameScore = 1000
+            if (currentTitle == targetEs || currentTitle == targetEn) nameScore = 0
             else if (currentTitle.contains(targetEs) || targetEs.contains(currentTitle)) nameScore = 10
             else if (currentTitle.contains(targetEn) || targetEn.contains(currentTitle)) nameScore = 10
             
-            // 2. PUNTUACIÓN POR AÑO (Vital para Chainsaw Man / Remakes)
+            // 2. Año
             var yearScore = 0
-            val candidateYear = candidate.year?.toIntOrNull() ?: 0
-            
-            // Solo evaluamos año si tenemos datos válidos (> 0)
             if (year > 0 && candidateYear > 0) {
                 val diff = abs(year - candidateYear)
                 yearScore = when (diff) {
-                    0 -> 0   // Mismo año
-                    1 -> 5   // 1 año de diferencia (Aceptable)
-                    2 -> 50  // 2 años (Sospechoso)
-                    else -> 500 // ¡Demasiada diferencia! Penalización masiva
+                    0 -> 0 
+                    1 -> 5 
+                    else -> 500 // Penalización enorme
                 }
             }
-
             nameScore + yearScore
         }
 
-        // Filtro de seguridad
+        // --- FILTRO DE SEGURIDAD (ANTI-PREDATOR 1987) ---
         if (bestMatch == null) return emptyList()
-        
+
+        // Calcular la diferencia de año del ganador
+        val winnerYear = bestMatch.year?.toIntOrNull() ?: 0
+        if (year > 0 && winnerYear > 0) {
+            val diff = abs(year - winnerYear)
+            // Si la diferencia es mayor a 2 años, ES OTRA PELÍCULA.
+            if (diff > 2) {
+                Log.w("KRONOS", "⛔ BLOQUEADO: Se encontró '${bestMatch.title}' ($winnerYear) pero buscabas ($year). Diferencia: $diff años.")
+                return emptyList() // Retornamos vacío, no reproducimos la equivocada.
+            }
+        }
+        // ------------------------------------------------
+
         Log.d("KRONOS", "🎯 Ganador Elegido: '${bestMatch.title}' (${bestMatch.year})")
+
+        // ... (resto del código loadStream) ...
 
         // --- EXTRACCIÓN DE SERVIDORES ---
         val jsonServers = loadStream(bestMatch.id, "movie") ?: "[]"
