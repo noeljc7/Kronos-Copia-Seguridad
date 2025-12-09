@@ -13,8 +13,17 @@ import java.util.regex.Pattern
 import java.text.Normalizer
 import java.util.Locale
 
+// Aseguramos que usamos los modelos correctos del paquete actual
+import com.kronos.tv.providers.KronosProvider
+import com.kronos.tv.providers.SourceLink
+
 class SoloLatinoProvider : KronosProvider {
     override val name = "SoloLatino"
+    // Propiedad 'language' requerida si tu interfaz KronosProvider nueva la pide.
+    // Si tu interfaz KronosProvider NO tiene 'val language', borra esta línea.
+    // Si SÍ la tiene (como en el Provider.kt que hicimos), déjala.
+    val language = "Latino" 
+
     private val client = OkHttpClient()
     
     private val headers = mapOf(
@@ -44,8 +53,7 @@ class SoloLatinoProvider : KronosProvider {
                 // Estrategia de Respaldo: Slug Web
                 if (links.isEmpty()) {
                     val slug = cleanTitle(title)
-                    // Para pelis suele ser /episodios/nombre-id/ o similar, pero tu script prioriza series en web.
-                    // Dejamos la búsqueda web principalmente para series por ahora según tu script.
+                    // ... lógica de respaldo ...
                 }
             } catch (e: Exception) {
                 AppLogger.log("SoloLatino", "Error Película: ${e.message}")
@@ -77,10 +85,8 @@ class SoloLatinoProvider : KronosProvider {
                 }
 
                 // Estrategia C: Web Slug (Respaldo si falla IMDB o no hay links)
-                // URL: https://sololatino.net/episodios/nombre-serie-1x1/
                 if (links.isEmpty()) {
                     val slug = cleanTitle(showTitle)
-                    // Nota: En web a veces usan 1x1 sin ceros, o 1x01. Probamos ambos.
                     val webUrlPad = "https://sololatino.net/episodios/$slug-$epPad/"
                     val webUrlNoPad = "https://sololatino.net/episodios/$slug-${season}x${episode}/"
                     
@@ -189,13 +195,15 @@ class SoloLatinoProvider : KronosProvider {
         val isDirect = url.endsWith(".mp4") || url.endsWith(".m3u8") || url.contains("stream.php")
         val prettyServer = serverName.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
 
+        // AQUÍ ESTABA EL PROBLEMA POTENCIAL: Ajustamos al nuevo constructor de SourceLink
         links.add(SourceLink(
             name = "SL - $prettyServer",
             url = url,
             quality = "HD",
             language = lang,
-            isDirect = isDirect,
-            requiresWebView = !isDirect // Si no es directo, usamos el Sniffer/Web
+            isDirect = isDirect,       // Usamos el nombre del parámetro explícito
+            requiresWebView = !isDirect, // Usamos el nombre del parámetro explícito
+            provider = name            // Añadimos el nombre del proveedor
         ))
     }
 
@@ -222,14 +230,10 @@ class SoloLatinoProvider : KronosProvider {
 
     private fun cleanTitle(title: String): String {
         var clean = title.lowercase()
-        // Quitar año (2024)
         clean = clean.replace(Regex("\\s\\(\\d{4}\\).*$"), "")
-        // Normalizar acentos
         val nfd = Normalizer.normalize(clean, Normalizer.Form.NFD)
         clean = Pattern.compile("\\p{InCombiningDiacriticalMarks}+").matcher(nfd).replaceAll("")
-        // Solo alfanuméricos y espacios
         clean = clean.replace(Regex("[^a-z0-9\\s-]"), "")
-        // Espacios a guiones
         clean = clean.replace(Regex("[\\s]+"), "-")
         return clean.trim('-')
     }
