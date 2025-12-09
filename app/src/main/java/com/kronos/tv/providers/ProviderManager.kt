@@ -1,13 +1,18 @@
 package com.kronos.tv.providers
 
+import android.content.Context
 import android.util.Log
 import com.kronos.tv.engine.ScriptEngine
+import com.kronos.tv.models.SourceLink
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 
-class ProviderManager {
+// OJO: Agregamos 'private val context: Context' al constructor
+class ProviderManager(private val context: Context) {
 
     // Lista de proveedores locales (siempre disponibles)
     private val providers = mutableListOf<KronosProvider>(
@@ -23,7 +28,7 @@ class ProviderManager {
         val remoteProviders = mutableListOf<KronosProvider>()
         private var isRemoteLoaded = false
 
-        // ESTE ES EL MÉTODO QUE LLAMA TU MAIN ACTIVITY
+        // ESTE ES EL MÉTODO QUE LLAMA TU MAIN ACTIVITY (Para carga remota real)
         suspend fun loadRemoteProviders(manifestUrl: String) = withContext(Dispatchers.IO) {
             if (isRemoteLoaded) return@withContext
             try {
@@ -60,9 +65,59 @@ class ProviderManager {
         }
     }
 
-    // Constructor: Al crear una instancia, fusionamos locales + remotos
+    // Constructor: Al crear una instancia, fusionamos locales + remotos + ASSETS
     init {
+        // 1. Agregar los remotos que ya se hayan descargado
         providers.addAll(remoteProviders)
+
+        // 2. CARGA LOCAL DE EMERGENCIA (Desde assets/sololatino.js)
+        loadLocalDebugProvider()
+    }
+
+    /**
+     * Esta función lee el archivo JS local y lo inyecta.
+     * Útil para desarrollo sin servidor.
+     */
+    private fun loadLocalDebugProvider() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Intentamos leer el archivo desde assets
+                // Asegúrate de que el archivo se llame EXACTAMENTE "sololatino.js" en src/main/assets
+                val inputStream = context.assets.open("sololatino.js")
+                val size = inputStream.available()
+                val buffer = ByteArray(size)
+                inputStream.read(buffer)
+                inputStream.close()
+                val jsCode = String(buffer, Charsets.UTF_8)
+
+                withContext(Dispatchers.Main) {
+                    // Inyectamos el código al WebView
+                    ScriptEngine.loadScript(jsCode)
+                    Log.d("KRONOS", "✅ JS Local Inyectado: sololatino.js")
+
+                    // Registramos manualmente el proveedor JS en la lista de esta instancia
+                    val providerId = "sololatino"
+                    
+                    // Solo lo agregamos si no existe ya
+                    if (providers.none { it.name == providerId }) {
+                        val localJsProvider = JsContentProvider(providerId, "SoloLatino (Local)")
+                        providers.add(localJsProvider)
+                        
+                        // Opcional: Agregarlo a la estática también
+                        if (remoteProviders.none { it.name == providerId }) {
+                            remoteProviders.add(localJsProvider)
+                        }
+                        
+                        Log.d("KRONOS", "✅ Provider SoloLatino registrado y listo para usar")
+                    }
+                }
+            } catch (e: java.io.FileNotFoundException) {
+                Log.w("KRONOS", "⚠️ No se encontró 'sololatino.js' en assets. Saltando carga local.")
+            } catch (e: Exception) {
+                Log.e("KRONOS", "❌ Error cargando asset local: ${e.message}")
+                e.printStackTrace()
+            }
+        }
     }
 
     // Tu método de búsqueda (Instancia)
