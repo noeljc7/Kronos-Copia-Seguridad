@@ -21,6 +21,7 @@ object ScriptEngine {
     private var webView: WebView? = null
     private var isInitialized = false
     private val uiHandler = Handler(Looper.getMainLooper())
+    private val bridge = JsBridge() // Instancia única del puente
 
     private const val BASE_JS_ENV = "var KronosEngine = KronosEngine || { providers: {} };"
 
@@ -44,7 +45,10 @@ object ScriptEngine {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-        wv.addJavascriptInterface(JsBridge(), "bridge")
+        
+        // Usamos nuestra instancia controlada del bridge
+        wv.addJavascriptInterface(bridge, "bridge")
+        
         wv.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
                 Log.d("KRONOS_JS_CONSOLE", "${cm?.message()} -- line ${cm?.lineNumber()}")
@@ -85,38 +89,32 @@ object ScriptEngine {
         webView?.evaluateJavascript(jsCode, null)
     }
 
-    suspend fun evaluateJs(script: String): String = suspendCancellableCoroutine { cont ->
-        uiHandler.post {
-            val wv = webView
-            if (wv != null) {
-                wv.evaluateJavascript(script) { result ->
-                    val cleanResult = if (result != null && result != "null") {
-                        if (result.startsWith("\"") && result.endsWith("\"")) {
-                            result.substring(1, result.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
-                        } else result
-                    } else "null"
-                    cont.resume(cleanResult)
-                }
-            } else {
-                cont.resume("null")
-            }
-        }
-    }
-
-    // --- ESTA ES LA FUNCIÓN MÁGICA QUE NECESITAS ---
+    // --- LA SOLUCIÓN CALLBACK (A PRUEBA DE BALAS) ---
     suspend fun queryProvider(providerName: String, functionName: String, args: Array<Any>): String? = suspendCancellableCoroutine { cont ->
         val argsString = args.joinToString(",") { 
             if (it is String) "'${it.replace("'", "\\'")}'" else it.toString() 
         }
 
-        // Wrapper JS que espera la promesa
+        // Configurar el callback ANTES de ejecutar
+        // Esto captura la respuesta cuando el JS llame a bridge.onResult()
+        bridge.onResultCallback = { result ->
+            // Limpieza básica por seguridad
+            bridge.onResultCallback = null // Limpiar para evitar fugas
+            if (cont.isActive) {
+                cont.resume(result)
+            }
+        }
+
+        // JS que NO retorna nada, sino que llama al puente al finalizar
         val jsCode = """
             (async function() {
                 try {
                     const result = await KronosEngine.providers['$providerName'].$functionName($argsString);
-                    return JSON.stringify(result);
+                    // AQUÍ ESTÁ LA MAGIA: Llamada explícita de vuelta a Kotlin
+                    bridge.onResult(JSON.stringify(result));
                 } catch(e) {
-                    return "[]";
+                    bridge.log("JS ERROR: " + e.message);
+                    bridge.onResult("[]");
                 }
             })()
         """.trimIndent()
@@ -124,21 +122,9 @@ object ScriptEngine {
         uiHandler.post {
             val wv = webView
             if (wv != null) {
-                wv.evaluateJavascript(jsCode) { result ->
-                    // Limpiamos el string escapado que devuelve evaluateJavascript
-                    val cleanResult = if (result != null && result != "null") {
-                        if (result.startsWith("\"") && result.endsWith("\"")) {
-                            // Quitamos comillas dobles externas y escapadas internas
-                            result.substring(1, result.length - 1)
-                                .replace("\\\"", "\"")
-                                .replace("\\\\", "\\")
-                        } else result
-                    } else "[]"
-                    
-                    cont.resume(cleanResult)
-                }
+                wv.evaluateJavascript(jsCode, null)
             } else {
-                cont.resume("[]")
+                if (cont.isActive) cont.resume("[]")
             }
         }
     }
