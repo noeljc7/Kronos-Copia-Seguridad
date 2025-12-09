@@ -2,10 +2,12 @@
   "version": 4,
   "scripts": [
     "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/providers/voe.js",
-    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/providers/CinemitasScraper.js"
+    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/providers/cinemitas.js"
   ],
-  "search_providers": [
-    "Cinemitas"
+  "providers": [
+    {
+      "id": "Cinemitas",
+      "name": "Cinemitas HD (Remoto)"
+    }
   ]
 }
-
