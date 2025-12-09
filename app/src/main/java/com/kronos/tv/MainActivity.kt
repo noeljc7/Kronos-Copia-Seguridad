@@ -204,14 +204,19 @@ fun AppNavigation(providerManager: ProviderManager) { // <--- Recibimos el Manag
 
         ScreenState.SELECTION -> {
             if (selectedMovie != null) {
-                // --- AQUÍ CONECTAMOS EL MANAGER ---
+                // --- ACTUALIZACIÓN ---
                 SourceSelectionScreen(
                     tmdbId = selectedMovie!!.id,
                     title = selectedMovie!!.getDisplayTitle(),
+                    
+                    // Pasamos los nuevos datos usando los helpers seguros
+                    originalTitle = selectedMovie!!.getOriginalTitleSafe(), 
+                    year = selectedMovie!!.getYearSafe(),
+                    
                     isMovie = selectedMovie!!.media_type != "tv",
                     season = selectedSeasonNum, 
                     episode = selectedEpisodeNum,
-                    providerManager = providerManager, // <--- Pasamos la instancia (Marcará error si no actualizas la pantalla)
+                    providerManager = providerManager,
                     onLinkSelected = { url, _ ->
                         videoUrlToPlay = url
                         navigateTo(ScreenState.PLAYER)
