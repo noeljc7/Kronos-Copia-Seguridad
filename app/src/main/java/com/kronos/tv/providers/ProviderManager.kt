@@ -10,30 +10,26 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 
-// --- CLASE SOURCELINK (VERSION CORREGIDA Y COMPATIBLE) ---
+// --- CLASE SOURCELINK ---
 data class SourceLink(
     val name: String,
     val url: String,
     val quality: String,
     val language: String,
-    val provider: String = "", // <--- ¡AQUÍ ESTÁ EL ARREGLO! (Campo recuperado)
+    val provider: String = "", 
     val isDirect: Boolean = false,
     val requiresWebView: Boolean = false
 )
-// ---------------------------------------------------------
 
-// OJO: Constructor recibe Context para poder leer los assets
 class ProviderManager(private val context: Context) {
 
-    // Lista de proveedores locales (siempre disponibles)
-    // Lista vacía al inicio. Se llenará SOLO con el JS.
-private val providers = mutableListOf<KronosProvider>()
+    // Lista vacía al inicio (se llena con JS local o remoto)
+    private val providers = mutableListOf<KronosProvider>()
 
     companion object {
         val remoteProviders = mutableListOf<KronosProvider>()
         private var isRemoteLoaded = false
 
-        // Método para carga remota (GitHub)
         suspend fun loadRemoteProviders(manifestUrl: String) = withContext(Dispatchers.IO) {
             if (isRemoteLoaded) return@withContext
             try {
@@ -67,17 +63,14 @@ private val providers = mutableListOf<KronosProvider>()
         }
     }
 
-    // Al iniciar, cargamos lo remoto + lo local
     init {
         providers.addAll(remoteProviders)
         loadLocalDebugProvider()
     }
 
-    // --- CARGA DE EMERGENCIA (Local Assets) ---
     private fun loadLocalDebugProvider() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Buscamos sololatino.js en la carpeta assets
                 val inputStream = context.assets.open("sololatino.js")
                 val size = inputStream.available()
                 val buffer = ByteArray(size)
@@ -86,21 +79,16 @@ private val providers = mutableListOf<KronosProvider>()
                 val jsCode = String(buffer, Charsets.UTF_8)
 
                 withContext(Dispatchers.Main) {
-                    // Inyectamos el JS
                     ScriptEngine.loadScript(jsCode)
                     Log.d("KRONOS", "✅ JS Local Inyectado: sololatino.js")
 
-                    // Registramos el provider manualmente
                     val providerId = "sololatino"
                     if (providers.none { it.name == providerId }) {
                         val localJsProvider = JsContentProvider(providerId, "SoloLatino (Local)")
                         providers.add(localJsProvider)
-                        
-                        // Añadirlo también a la lista estática por seguridad
                         if (remoteProviders.none { it.name == providerId }) {
                             remoteProviders.add(localJsProvider)
                         }
-                        
                         Log.d("KRONOS", "✅ Provider SoloLatino registrado")
                     }
                 }
@@ -112,14 +100,24 @@ private val providers = mutableListOf<KronosProvider>()
         }
     }
 
-    // Buscador principal
-    suspend fun getLinks(tmdbId: Int, title: String, isMovie: Boolean, year: Int = 0, season: Int = 0, episode: Int = 0): List<SourceLink> = withContext(Dispatchers.IO) {
+    // --- FUNCIÓN ACTUALIZADA (Recibe originalTitle y year) ---
+    suspend fun getLinks(
+        tmdbId: Int, 
+        title: String, 
+        originalTitle: String, // <--- NUEVO
+        isMovie: Boolean, 
+        year: Int,             // <--- NUEVO
+        season: Int = 0, 
+        episode: Int = 0
+    ): List<SourceLink> = withContext(Dispatchers.IO) {
+        
         val allLinks = mutableListOf<SourceLink>()
         
         for (provider in providers) {
             try {
                 val links = if (isMovie) {
-                    provider.getMovieLinks(tmdbId, title, title, year)
+                    // Pasamos todos los datos al provider
+                    provider.getMovieLinks(tmdbId, title, originalTitle, year)
                 } else {
                     provider.getEpisodeLinks(tmdbId, title, season, episode)
                 }
