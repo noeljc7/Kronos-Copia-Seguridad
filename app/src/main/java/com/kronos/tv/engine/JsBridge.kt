@@ -5,6 +5,17 @@ import org.jsoup.Jsoup
 
 class JsBridge {
     
+    // --- ESTO ES LO NUEVO QUE NECESITAMOS AGREGAR ---
+    // Un "buzón" donde guardaremos la función para avisar a Kotlin
+    var onResultCallback: ((String) -> Unit)? = null
+
+    // Esta función la llamará el JS cuando termine: bridge.onResult(...)
+    @JavascriptInterface
+    fun onResult(result: String) {
+        onResultCallback?.invoke(result)
+    }
+    // ------------------------------------------------
+
     // GET (Compatible con scripts viejos)
     @JavascriptInterface
     fun fetchHtml(url: String): String {
