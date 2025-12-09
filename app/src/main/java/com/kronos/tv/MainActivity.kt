@@ -17,6 +17,7 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
 import com.kronos.tv.engine.ScriptEngine
 import com.kronos.tv.network.TmdbMovie
+import com.kronos.tv.providers.ProviderManager // <--- IMPORTANTE: Importamos el Manager
 import com.kronos.tv.ui.*
 import kotlinx.coroutines.launch
 
@@ -31,12 +32,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // 1. INICIALIZAR EL MOTOR (Arranca el WebView invisible)
+        // Esto es obligatorio para que JavaScript funcione
         ScriptEngine.initialize(this)
 
-        // 2. CARGAR SCRIPTS REMOTOS (Descarga cinemitas.js y otros)
+        // 2. CARGAR PROVEEDORES REMOTOS (Desde GitHub)
+        // Usamos el ProviderManager para que gestione la descarga y registro
         lifecycleScope.launch {
             val manifestUrl = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/manifest.json"
-            ScriptEngine.loadManifest(manifestUrl)
+            ProviderManager.loadRemoteProviders(manifestUrl)
         }
 
         // --- CAZA ERRORES GLOBAL (CRASH HANDLER) ---
