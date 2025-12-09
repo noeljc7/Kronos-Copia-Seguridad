@@ -36,27 +36,30 @@ import java.util.Locale
 fun SourceSelectionScreen(
     tmdbId: Int,
     title: String,
+    originalTitle: String, // <--- 1. ASEGURA QUE ESTO ESTÉ AQUÍ
+    year: Int,             // <--- 2. ASEGURA QUE ESTO ESTÉ AQUÍ
     isMovie: Boolean,
     season: Int,
     episode: Int,
-    providerManager: ProviderManager, // <--- 1. RECIBIMOS LA INSTANCIA AQUÍ
+    providerManager: ProviderManager,
     onLinkSelected: (String, Boolean) -> Unit,
     onBack: () -> Unit
 ) {
-    var isLoading by remember { mutableStateOf(true) }
-    var isResolving by remember { mutableStateOf(false) }
-    var links by remember { mutableStateOf(emptyList<SourceLink>()) }
-    
-    // --- 2. YA NO CREAMOS UNA INSTANCIA NUEVA AQUÍ ---
-    // val manager = remember { ProviderManager() } <-- BORRADO
-    
     val scope = rememberCoroutineScope()
     val firstLinkFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        // --- 3. USAMOS LA INSTANCIA QUE RECIBIMOS ---
-        // (Usamos providerManager en lugar de manager)
-        links = providerManager.getLinks(tmdbId, title, isMovie, 0, season, episode)
+        // --- 3. CORRECCIÓN DEL LLAMADO (AQUÍ ESTABA EL ERROR) ---
+        // Debemos usar argumentos nombrados para evitar errores de orden
+        links = providerManager.getLinks(
+            tmdbId = tmdbId, 
+            title = title, 
+            originalTitle = originalTitle, // Pasamos el título original
+            isMovie = isMovie, 
+            year = year,                   // Pasamos el año
+            season = season, 
+            episode = episode
+        )
         isLoading = false
         
         kotlinx.coroutines.delay(200)
