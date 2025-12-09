@@ -13,27 +13,25 @@ data class Genre(val id: Int, val name: String)
 data class TmdbMovie(
     val id: Int,
     val title: String?,
-    val original_title: String?, 
+    val original_title: String? = null, // <--- AGREGADO "= null" (Opcional)
     val name: String?,
-    val original_name: String?,  
+    val original_name: String? = null,  // <--- AGREGADO "= null" (Opcional)
     val overview: String?,
     val poster_path: String?,
     val backdrop_path: String?,
-    val release_date: String?,   
-    val first_air_date: String?, 
+    val release_date: String? = null,   // <--- AGREGADO "= null" (Opcional)
+    val first_air_date: String? = null, // <--- AGREGADO "= null" (Opcional)
     val vote_average: Double,
     val media_type: String? = "movie"
 ) {
     fun getDisplayTitle(): String = title ?: name ?: "Sin Título"
     
-    // --- NUEVAS FUNCIONES PARA LA BÚSQUEDA INTELIGENTE ---
     fun getOriginalTitleSafe(): String = original_title ?: original_name ?: getDisplayTitle()
     
     fun getYearSafe(): Int {
         val date = release_date ?: first_air_date
         return date?.take(4)?.toIntOrNull() ?: 0
     }
-    // -----------------------------------------------------
 
     fun getFullPosterUrl() = if (poster_path != null) "https://image.tmdb.org/t/p/w500$poster_path" else "https://via.placeholder.com/500x750?text=No+Image"
     fun getFullBackdropUrl() = if (backdrop_path != null) "https://image.tmdb.org/t/p/original$backdrop_path" else getFullPosterUrl()
