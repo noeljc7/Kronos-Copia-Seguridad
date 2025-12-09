@@ -7,20 +7,34 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 data class TmdbResponse(val results: List<TmdbMovie>)
-data class GenreResponse(val genres: List<Genre>) // NUEVO
-data class Genre(val id: Int, val name: String)   // NUEVO
+data class GenreResponse(val genres: List<Genre>)
+data class Genre(val id: Int, val name: String)
 
 data class TmdbMovie(
     val id: Int,
     val title: String?,
+    val original_title: String?, 
     val name: String?,
-    val overview: String?, // AHORA ES NULLABLE
+    val original_name: String?,  
+    val overview: String?,
     val poster_path: String?,
     val backdrop_path: String?,
+    val release_date: String?,   
+    val first_air_date: String?, 
     val vote_average: Double,
     val media_type: String? = "movie"
 ) {
     fun getDisplayTitle(): String = title ?: name ?: "Sin Título"
+    
+    // --- NUEVAS FUNCIONES PARA LA BÚSQUEDA INTELIGENTE ---
+    fun getOriginalTitleSafe(): String = original_title ?: original_name ?: getDisplayTitle()
+    
+    fun getYearSafe(): Int {
+        val date = release_date ?: first_air_date
+        return date?.take(4)?.toIntOrNull() ?: 0
+    }
+    // -----------------------------------------------------
+
     fun getFullPosterUrl() = if (poster_path != null) "https://image.tmdb.org/t/p/w500$poster_path" else "https://via.placeholder.com/500x750?text=No+Image"
     fun getFullBackdropUrl() = if (backdrop_path != null) "https://image.tmdb.org/t/p/original$backdrop_path" else getFullPosterUrl()
     fun getOverviewSafe() = if (!overview.isNullOrBlank()) overview else "Sin descripción disponible en español."
@@ -48,13 +62,11 @@ interface TmdbService {
     @GET("tv/popular")
     suspend fun getPopularTvShows(@Query("api_key") apiKey: String, @Query("language") language: String = "es-MX", @Query("page") page: Int = 1): TmdbResponse
     
-    // LISTAS DE GÉNEROS
     @GET("genre/movie/list")
     suspend fun getMovieGenres(@Query("api_key") apiKey: String, @Query("language") language: String = "es-MX"): GenreResponse
     @GET("genre/tv/list")
     suspend fun getTvGenres(@Query("api_key") apiKey: String, @Query("language") language: String = "es-MX"): GenreResponse
 
-    // DESCUBRIR POR GÉNERO (PAGINADO)
     @GET("discover/movie")
     suspend fun getMoviesByGenre(@Query("api_key") apiKey: String, @Query("with_genres") genreId: Int, @Query("language") language: String = "es-MX", @Query("page") page: Int = 1): TmdbResponse
     @GET("discover/tv")
@@ -76,7 +88,7 @@ interface TmdbService {
 
 object RetrofitInstance {
     private const val BASE_URL = "https://api.themoviedb.org/3/"
-    private const val API_KEY = "688d65c7c7e7995438db052275db288d" // REEMPLAZAR
+    private const val API_KEY = "688d65c7c7e7995438db052275db288d" // Tu API Key
     private val retrofit by lazy { Retrofit.Builder().baseUrl(BASE_URL).addConverterFactory(GsonConverterFactory.create()).build() }
     val api: TmdbService by lazy { retrofit.create(TmdbService::class.java) }
     fun getApiKey(): String = API_KEY
