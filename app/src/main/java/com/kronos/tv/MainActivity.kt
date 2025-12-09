@@ -17,7 +17,7 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
 import com.kronos.tv.engine.ScriptEngine
 import com.kronos.tv.network.TmdbMovie
-import com.kronos.tv.providers.ProviderManager // <--- IMPORTANTE: Importamos el Manager
+import com.kronos.tv.providers.ProviderManager 
 import com.kronos.tv.ui.*
 import kotlinx.coroutines.launch
 
@@ -31,18 +31,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 1. INICIALIZAR EL MOTOR (Arranca el WebView invisible)
-        // Esto es obligatorio para que JavaScript funcione
+        // 1. INICIALIZAR EL MOTOR
         ScriptEngine.initialize(this)
 
-        // 2. CARGAR PROVEEDORES REMOTOS (Desde GitHub)
-        // Usamos el ProviderManager para que gestione la descarga y registro
+        // 2. INSTANCIAR EL GESTOR DE PROVEEDORES (Aquí está el val que faltaba)
+        // Al hacer esto, se dispara el 'init' y carga 'sololatino.js' desde assets
+        val providerManager = ProviderManager(this)
+
+        // 3. CARGAR PROVEEDORES REMOTOS (Sigue funcionando estático para la descarga)
         lifecycleScope.launch {
             val manifestUrl = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/manifest.json"
             ProviderManager.loadRemoteProviders(manifestUrl)
         }
 
-        // --- CAZA ERRORES GLOBAL (CRASH HANDLER) ---
+        // --- CRASH HANDLER ---
         Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
             Log.e("KronosCrash", "CRASH DETECTADO: ${throwable.message}", throwable)
             
@@ -54,22 +56,22 @@ class MainActivity : ComponentActivity() {
             android.os.Process.killProcess(android.os.Process.myPid())
             System.exit(1)
         }
-        // --------------------------------------------
 
         setContent {
             Surface(modifier = Modifier.fillMaxSize(), shape = RectangleShape) {
-                AppNavigation()
+                // Pasamos el providerManager a la navegación
+                AppNavigation(providerManager)
             }
         }
     }
 }
 
 @Composable
-fun AppNavigation() {
+fun AppNavigation(providerManager: ProviderManager) { // <--- Recibimos el Manager aquí
     val backStack = remember { mutableStateListOf(ScreenState.HOME) }
     val currentScreen = backStack.last()
 
-    // --- ESTADOS GLOBALES (MEMORIA) ---
+    // --- ESTADOS GLOBALES ---
     var selectedMovie by remember { mutableStateOf<TmdbMovie?>(null) }
     var selectedSeasonNum by remember { mutableStateOf(1) }
     var selectedEpisodeNum by remember { mutableStateOf(1) }
@@ -203,12 +205,14 @@ fun AppNavigation() {
 
         ScreenState.SELECTION -> {
             if (selectedMovie != null) {
+                // --- AQUÍ CONECTAMOS EL MANAGER ---
                 SourceSelectionScreen(
                     tmdbId = selectedMovie!!.id,
                     title = selectedMovie!!.getDisplayTitle(),
                     isMovie = selectedMovie!!.media_type != "tv",
                     season = selectedSeasonNum, 
                     episode = selectedEpisodeNum,
+                    providerManager = providerManager, // <--- Pasamos la instancia (Marcará error si no actualizas la pantalla)
                     onLinkSelected = { url, _ ->
                         videoUrlToPlay = url
                         navigateTo(ScreenState.PLAYER)
