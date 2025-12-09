@@ -1,4 +1,4 @@
-// KRONOS PROVIDER: SoloLatino v10.0 (Lazy Load Support)
+// KRONOS PROVIDER: SoloLatino v11.0 (XuPalace & Strict Mode)
 (function() {
     const provider = {
         id: 'sololatino',
@@ -7,7 +7,7 @@
         headers: {'User-Agent': 'Mozilla/5.0 (Linux; Android 10)'},
 
         search: async function(query) {
-            // (Lógica de búsqueda v9.0 - NO TOCAR, YA FUNCIONA)
+            // ... Lógica de búsqueda estándar (Igual que v10) ...
             try {
                 const cleanQuery = encodeURIComponent(query.replace(/[:\-\.]/g, ' '));
                 const searchUrl = this.baseUrl + "/?s=" + cleanQuery;
@@ -15,7 +15,6 @@
                 let html = "";
                 try { html = await bridge.fetchHtml(searchUrl); } catch (e) { return []; }
                 if (!html || html.length < 100) return [];
-                
                 const results = [];
                 const articleRegex = /<article[^>]*class="item\s+(movies|tvshows)"[^>]*>([\s\S]*?)<\/article>/g;
                 let match;
@@ -36,7 +35,6 @@
                         });
                     }
                 }
-                // Fallback redirección
                 if (results.length === 0) {
                     const canonicalMatch = html.match(/<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']/i);
                     const titleMatch = html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i);
@@ -52,32 +50,28 @@
             } catch (e) { bridge.onResult("[]"); }
         },
 
-        // --- AQUÍ ESTÁ LA MEJORA (RESOLVE) ---
         resolveVideo: async function(url, type) {
             try {
                 bridge.log("JS: Extrayendo de: " + url);
                 const html = await bridge.fetchHtml(url);
                 
-                bridge.log("JS: HTML Película descargado (" + html.length + " bytes)");
-
-                // BUSCAR EL IFRAME (Soporte Lazy Load)
-                // Buscamos src="..." O data-src="..."
+                // Buscar iframe principal
                 const iframeMatch = html.match(/<iframe[^>]*\s(src|data-src)=["']([^"']+)["'][^>]*>/i);
                 
                 if (!iframeMatch) { 
-                    bridge.log("JS: ❌ No se encontró ningún iframe en la página.");
+                    bridge.log("JS: ❌ No se encontró iframe inicial.");
                     bridge.onResult("[]"); 
                     return; 
                 }
 
-                let embedUrl = iframeMatch[2]; // El grupo 2 es la URL
+                let embedUrl = iframeMatch[2];
                 if (embedUrl.startsWith("//")) embedUrl = "https:" + embedUrl;
                 
-                bridge.log("JS: Iframe encontrado: " + embedUrl);
+                bridge.log("JS: Analizando Embed: " + embedUrl);
                 const embedHtml = await bridge.fetchHtml(embedUrl);
                 const servers = [];
 
-                // 1. EMBED69
+                // --- ESTRATEGIA 1: EMBED69 (JSON) ---
                 if (embedHtml.includes('eyJ')) {
                     const jsonMatch = embedHtml.match(/let dataLink = (\[.*?\]);/);
                     if (jsonMatch) {
@@ -99,30 +93,40 @@
                         });
                     }
                 } 
-                // 2. XUPALACE / GENERICO
-                else {
-                    const regex = /go_to_player.*?\('([^']+)'\)/g;
-                    let match;
-                    while ((match = regex.exec(embedHtml)) !== null) {
-                        let rawUrl = match[1];
-                        if (rawUrl.includes('link=')) {
-                            try { rawUrl = atob(rawUrl.split('link=')[1].split('&')[0]); } catch(e){}
-                        }
-                        
-                        let serverName = "Server";
-                        if (rawUrl.includes('vidhide')) serverName = "Vidhide";
-                        else if (rawUrl.includes('wish')) serverName = "Streamwish";
-                        else if (rawUrl.includes('voe')) serverName = "Voe";
-                        
-                        servers.push({ server: serverName, lang: "Latino", url: rawUrl });
+                
+                // --- ESTRATEGIA 2: XUPALACE / DOOPLAY (Tu HTML) ---
+                // Aquí usamos Regex para encontrar 'go_to_playerVast' y 'go_to_player'
+                const listItemsRegex = /<li[^>]*onclick=["'](go_to_playerVast|go_to_player)\(['"]([^'"]+)['"]/g;
+                let liMatch;
+                
+                while ((liMatch = listItemsRegex.exec(embedHtml)) !== null) {
+                    let rawUrl = liMatch[2]; // La URL capturada
+                    
+                    // Decodificar si está en Base64 (link=...)
+                    if (rawUrl.includes('link=')) {
+                        try { rawUrl = atob(rawUrl.split('link=')[1].split('&')[0]); } catch(e){}
                     }
+
+                    // Adivinar nombre del servidor
+                    let serverName = "Server";
+                    if (rawUrl.includes('filemoon')) serverName = "Filemoon";
+                    else if (rawUrl.includes('waaw')) serverName = "Waaw";
+                    else if (rawUrl.includes('vidhide')) serverName = "Vidhide";
+                    else if (rawUrl.includes('wish')) serverName = "Streamwish";
+                    else if (rawUrl.includes('voe')) serverName = "Voe";
+                    
+                    // Extraer idioma del atributo data-lang si es posible, sino default
+                    // (Simplificado para no complicar el regex)
+                    let lang = "Latino"; 
+
+                    servers.push({ server: serverName, lang: lang, url: rawUrl });
                 }
 
                 bridge.log("JS: Servidores extraídos: " + servers.length);
                 bridge.onResult(JSON.stringify(servers));
 
             } catch (e) { 
-                bridge.log("JS CRASH Resolve: " + e.message);
+                bridge.log("JS CRASH: " + e.message);
                 bridge.onResult("[]"); 
             }
         }
