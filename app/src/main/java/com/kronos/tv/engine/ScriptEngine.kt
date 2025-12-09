@@ -137,13 +137,34 @@ object ScriptEngine {
         return if (result != "null" && result.isNotBlank()) result else null
     }
 
-    suspend fun queryProvider(providerName: String, functionName: String, args: Array<Any>): String? {
-        // Convertimos args de Kotlin a String JS (ej: ['arg1', 'arg2'])
+    suspend fun queryProvider(providerName: String, functionName: String, args: Array<Any>): String? = suspendCancellableCoroutine { cont ->
         val argsString = args.joinToString(",") { 
-            if (it is String) "'$it'" else it.toString() 
+            if (it is String) "'${it.replace("'", "\\'")}'" else it.toString() 
         }
-        
-        val jsCode = "JSON.stringify(KronosEngine.providers['$providerName'].$functionName($argsString))"
-        return evaluateJs(jsCode)
+
+        // JS Wrapper que espera la promesa y llama a un callback
+        val jsCode = """
+            (async function() {
+                try {
+                    const result = await KronosEngine.providers['$providerName'].$functionName($argsString);
+                    return JSON.stringify(result);
+                } catch(e) {
+                    return "[]";
+                }
+            })()
+        """.trimIndent()
+
+        // El truco: evaluateJavascript soporta promesas si usas Chrome moderno
+        uiHandler.post {
+            webView?.evaluateJavascript(jsCode) { result ->
+                // result será el JSON string escapado
+                val cleanResult = if (result != null && result != "null") {
+                    if (result.startsWith("\"") && result.endsWith("\"")) {
+                        result.substring(1, result.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
+                    } else result
+                } else "[]"
+                
+                cont.resume(cleanResult)
+            }
+        }
     }
-}
