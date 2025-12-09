@@ -10,16 +10,17 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 
-// --- 🛡️ CLASE BLINDADA: Definida aquí mismo para evitar errores de importación ---
+// --- CLASE SOURCELINK (VERSION CORREGIDA Y COMPATIBLE) ---
 data class SourceLink(
     val name: String,
     val url: String,
     val quality: String,
     val language: String,
+    val provider: String = "", // <--- ¡AQUÍ ESTÁ EL ARREGLO! (Campo recuperado)
     val isDirect: Boolean = false,
     val requiresWebView: Boolean = false
 )
-// --------------------------------------------------------------------------------
+// ---------------------------------------------------------
 
 // OJO: Constructor recibe Context para poder leer los assets
 class ProviderManager(private val context: Context) {
