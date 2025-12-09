@@ -1,17 +1,12 @@
 package com.kronos.tv.providers
 
-data class SourceLink(
-    val name: String,
-    val url: String,
-    val quality: String,
-    val language: String,
-    val iconUrl: String? = null,
-    val isDirect: Boolean = false, // True = ExoPlayer, False = WebView
-    val requiresWebView: Boolean = false // <--- NUEVO CAMPO IMPORTANTE
-)
+import com.kronos.tv.models.SourceLink
 
-interface KronosProvider {
-    val name: String
-    suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink>
-    suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink>
+// Modificamos la clase base para cumplir con tu interfaz antigua
+abstract class Provider : KronosProvider {
+    abstract val language: String
+
+    // Estos métodos son los nuevos (internos)
+    abstract suspend fun search(query: String): List<com.kronos.tv.models.SearchResult>
+    abstract suspend fun loadStream(id: String, type: String): String?
 }
