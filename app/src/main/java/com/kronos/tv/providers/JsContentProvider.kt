@@ -7,6 +7,7 @@ import com.kronos.tv.models.Episode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.text.Normalizer
 
 class JsContentProvider(
     override val name: String,
@@ -16,66 +17,91 @@ class JsContentProvider(
     override val language = "Multi"
 
     override suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink> {
-        Log.d("KRONOS", "🎬 Iniciando búsqueda de PELÍCULA: $title")
+        Log.d("KRONOS", "🎬 Buscando película: $title")
+        
+        // 1. Obtener resultados de búsqueda del JS
         val results = search(title)
+        if (results.isEmpty()) return emptyList()
+
+        // 2. LÓGICA DE SELECCIÓN INTELIGENTE (Tu corrección)
+        // Buscamos el título que más se parezca al original
+        val target = normalize(title)
         
-        Log.d("KRONOS", "🔢 Resultados encontrados: ${results.size}")
-        
-        val bestMatch = results.firstOrNull { it.type == "movie" } 
-        if (bestMatch == null) {
-            Log.e("KRONOS", "❌ No se encontró ninguna película coincidente")
-            return emptyList()
+        val bestMatch = results.filter { it.type == "movie" }.minByOrNull { candidate ->
+            val current = normalize(candidate.title ?: "")
+            when {
+                current == target -> 0 // ¡Coincidencia Exacta! (Prioridad Máxima)
+                current.contains(target) -> current.length - target.length // Contiene el título (Prioridad Media)
+                else -> 1000 // No se parece (Prioridad Baja)
+            }
         }
 
-        Log.d("KRONOS", "✅ Coincidencia encontrada: ${bestMatch.title} (${bestMatch.id})")
-        val videoUrl = loadStream(bestMatch.id, "movie")
-        
-        return if (videoUrl != null) {
-            Log.d("KRONOS", "🔗 Link final resuelto: $videoUrl")
-            listOf(SourceLink(
-                name = "$displayName (JS)",
-                url = videoUrl,
-                quality = "720p",
-                language = "Latino",
-                provider = displayName,
-                isDirect = true,
-                requiresWebView = false
-            ))
+        if (bestMatch == null || normalize(bestMatch.title ?: "") != target) {
+             // Opcional: Si no hay match exacto, podrías decidir no mostrar nada o mostrar el más cercano.
+             // Por ahora dejamos el más cercano pero logeamos la diferencia
+             Log.w("KRONOS", "⚠️ No hubo match exacto. Usando: ${bestMatch?.title}")
         } else {
-            Log.e("KRONOS", "❌ El JS devolvió URL nula")
-            emptyList()
+             Log.d("KRONOS", "✅ Match Exacto: ${bestMatch.title}")
         }
+
+        if (bestMatch == null) return emptyList()
+
+        // 3. EXTRAER SERVIDORES (Soporte Multi-Opción)
+        val jsonServers = loadStream(bestMatch.id, "movie") ?: "[]"
+        
+        val links = mutableListOf<SourceLink>()
+        try {
+            // El JS ahora nos devuelve una lista de objetos [{"server":"Vidhide", "url":"..."}, ...]
+            val array = JSONArray(jsonServers)
+            
+            for (i in 0 until array.length()) {
+                val s = array.getJSONObject(i)
+                links.add(SourceLink(
+                    name = s.optString("server", "Server $i"),
+                    url = s.optString("url"),
+                    quality = "720p", 
+                    language = s.optString("lang", "Latino"),
+                    provider = displayName,
+                    isDirect = true // El JS ya nos da el link del video final
+                ))
+            }
+            Log.d("KRONOS", "🔗 Enlaces extraídos: ${links.size}")
+        } catch (e: Exception) {
+            Log.e("KRONOS", "Error parseando servidores: ${e.message}")
+            // Fallback por si el JS devolvió un string simple (versión vieja)
+            if (jsonServers.startsWith("http")) {
+                links.add(SourceLink("Opcion 1", jsonServers, "720p", "Latino", displayName, true))
+            }
+        }
+
+        return links
     }
 
     override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
-        Log.d("KRONOS", "📺 Iniciando búsqueda de SERIE: $showTitle $season x $episode")
-        // Construimos una query inteligente: "Serie Temporada x Episodio"
-        // SoloLatino suele funcionar bien buscando solo el nombre, pero probemos específico
-        val query = "$showTitle $season" 
-        val results = search(showTitle) // Buscamos la serie primero
-        
-        // Aquí falta lógica avanzada de JS para navegar episodios, 
-        // por ahora retornamos vacío para no romper nada.
+        // ... (Lógica de series pendiente, retorna vacío por seguridad)
         return emptyList()
     }
 
-    // --- MÉTODOS PUENTE CON LOGS ---
+    // --- HERRAMIENTAS ---
+
+    // Normaliza el texto para comparar (quita acentos, mayúsculas y símbolos)
+    // Ejemplo: "Batman: El Caballero" -> "batmanelcaballero"
+    private fun normalize(str: String): String {
+        return Normalizer.normalize(str, Normalizer.Form.NFD)
+            .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+            .lowercase()
+            .replace(Regex("[^a-z0-9]"), "")
+    }
 
     override suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
-        Log.d("KRONOS", "⚡ Llamando a JS search('$query')...")
         val json = ScriptEngine.queryProvider(name, "search", arrayOf(query))
-        
-        // ¡AQUÍ ESTÁ LA CLAVE! Vamos a ver qué nos escupe el JS
-        Log.d("KRONOS", "📦 Respuesta RAW del JS: $json") 
-        
         return@withContext parseResults(json ?: "[]")
     }
     
     override suspend fun loadStream(id: String, type: String): String? = withContext(Dispatchers.IO) {
-        Log.d("KRONOS", "⚡ Llamando a JS resolveVideo('$id')...")
         val res = ScriptEngine.queryProvider(name, "resolveVideo", arrayOf(id, type))
-        Log.d("KRONOS", "📦 Respuesta RAW Resolve: $res")
-        return@withContext if (res != "null" && res != null) res.replace("\"", "").trim() else null
+        // Limpiamos comillas extras si es necesario
+        return@withContext if (res != "null" && res != null) res.trim() else null
     }
 
     override suspend fun loadEpisodes(url: String): List<Episode> = emptyList() 
@@ -83,8 +109,8 @@ class JsContentProvider(
     private fun parseResults(json: String): List<SearchResult> {
         val list = mutableListOf<SearchResult>()
         try {
-            // Si el JS devuelve HTML de error en vez de JSON, esto explotará y lo veremos en los logs
-            val array = if (json.trim().startsWith("{")) JSONArray("[]") else JSONArray(json)
+            val cleanJson = if (json.trim().startsWith("{")) "[]" else json
+            val array = JSONArray(cleanJson)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
                 list.add(SearchResult(
@@ -95,10 +121,7 @@ class JsContentProvider(
                     type = obj.optString("type")
                 ))
             }
-        } catch (e: Exception) {
-            Log.e("KRONOS", "💥 Error parseando JSON: ${e.message}")
-            Log.e("KRONOS", "💥 JSON Culpable: $json")
-        }
+        } catch (e: Exception) { Log.e("KRONOS", "JSON Error: $json") }
         return list
     }
 }
