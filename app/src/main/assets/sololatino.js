@@ -1,3 +1,4 @@
+// KRONOS PROVIDER: SoloLatino v12.0 (Full Series Support)
 (function() {
     const provider = {
         id: 'sololatino',
@@ -6,6 +7,7 @@
         headers: {'User-Agent': 'Mozilla/5.0 (Linux; Android 10)'},
 
         search: async function(query) {
+            // (Lógica de búsqueda v11 - IDÉNTICA)
             try {
                 const cleanQuery = encodeURIComponent(query.replace(/[:\-\.]/g, ' '));
                 const searchUrl = this.baseUrl + "/?s=" + cleanQuery;
@@ -34,13 +36,21 @@
                     }
                 }
                 if (results.length === 0) {
+                    // Fallback redirección
                     const canonicalMatch = html.match(/<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']/i);
                     const titleMatch = html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i);
                     if (canonicalMatch && titleMatch) {
                         const directUrl = canonicalMatch[1];
                         if (directUrl.includes('/peliculas/') || directUrl.includes('/series/')) {
                             let rawTitle = titleMatch[1].replace(/^Ver\s+/i, '').replace(/\s+Online.*$/i, '').trim();
-                            results.push({ title: rawTitle, url: directUrl, img: "", id: directUrl, type: 'movie', year: "" });
+                            results.push({ 
+                                title: rawTitle, 
+                                url: directUrl, 
+                                img: "", 
+                                id: directUrl, 
+                                type: directUrl.includes('/series/') ? 'tv' : 'movie', 
+                                year: "" 
+                            });
                         }
                     }
                 }
@@ -48,12 +58,71 @@
             } catch (e) { bridge.onResult("[]"); }
         },
 
+        // --- NUEVA FUNCIÓN: RESOLVER EPISODIO ---
+        resolveEpisode: async function(showUrl, season, episode) {
+            try {
+                bridge.log("JS: Buscando episodio " + season + "x" + episode + " en " + showUrl);
+                const html = await bridge.fetchHtml(showUrl);
+                
+                // Estrategia Dooplay: Buscar en la lista de episodios
+                // Formato típico: <div class='episodiotitle'><a href='...'>1x1 Titulo</a></div>
+                // O attributes: <div data-season='1' data-episode='1'>...<a href='...'>
+                
+                // 1. Intentar encontrar el bloque exacto SxE
+                // Buscamos algo como "1x1" o "1x01" dentro de un <a> o cerca de él
+                
+                // Normalizamos "1" a "01" por si acaso
+                const epPad = episode < 10 ? "0" + episode : episode;
+                const pattern1 = new RegExp(season + "x" + episode + "[^0-9]", "i");
+                const pattern2 = new RegExp(season + "x" + epPad + "[^0-9]", "i");
+                
+                // Extraer todos los links de episodios
+                const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/g;
+                let linkMatch;
+                let episodeUrl = null;
+
+                while ((linkMatch = linkRegex.exec(html)) !== null) {
+                    const href = linkMatch[1];
+                    const text = linkMatch[2];
+                    
+                    // Solo nos interesan links de episodios
+                    if (!href.includes('/episodios/')) continue;
+
+                    // Chequeo 1: Texto contiene "1x1"
+                    if (pattern1.test(text) || pattern2.test(text)) {
+                        episodeUrl = href;
+                        break;
+                    }
+                    
+                    // Chequeo 2: La URL misma contiene "1x1" (ej: .../breaking-bad-1x1/)
+                    if (pattern1.test(href) || pattern2.test(href)) {
+                        episodeUrl = href;
+                        break;
+                    }
+                }
+
+                if (episodeUrl) {
+                    bridge.log("JS: Episodio encontrado: " + episodeUrl);
+                    // Reutilizamos la lógica de video normal
+                    await this.resolveVideo(episodeUrl, "tv");
+                } else {
+                    bridge.log("JS: ❌ Episodio no encontrado en la lista.");
+                    bridge.onResult("[]");
+                }
+
+            } catch (e) {
+                bridge.log("JS CRASH Episode: " + e.message);
+                bridge.onResult("[]");
+            }
+        },
+
+        // --- RESOLVER VIDEO (Ya funciona perfecto con Embed69/XuPalace) ---
         resolveVideo: async function(url, type) {
             try {
-                bridge.log("JS: Extrayendo de: " + url);
+                bridge.log("JS: Extrayendo servidores de: " + url);
                 const html = await bridge.fetchHtml(url);
-                const iframeMatch = html.match(/<iframe[^>]*\s(src|data-src)=["']([^"']+)["'][^>]*>/i);
                 
+                const iframeMatch = html.match(/<iframe[^>]*\s(src|data-src)=["']([^"']+)["'][^>]*>/i);
                 if (!iframeMatch) { bridge.onResult("[]"); return; }
 
                 let embedUrl = iframeMatch[2];
@@ -62,7 +131,7 @@
                 const embedHtml = await bridge.fetchHtml(embedUrl);
                 const servers = [];
 
-                // 1. EMBED69
+                // EMBED69
                 if (embedHtml.includes('eyJ')) {
                     const jsonMatch = embedHtml.match(/let dataLink = (\[.*?\]);/);
                     if (jsonMatch) {
@@ -84,26 +153,25 @@
                         });
                     }
                 } 
-                
-                // 2. XUPALACE / DOOPLAY (LIST ITEMS)
-                const listItemsRegex = /<li[^>]*onclick=["'](go_to_playerVast|go_to_player)\(['"]([^'"]+)['"]/g;
-                let liMatch;
-                while ((liMatch = listItemsRegex.exec(embedHtml)) !== null) {
-                    let rawUrl = liMatch[2];
-                    if (rawUrl.includes('link=')) {
-                        try { rawUrl = atob(rawUrl.split('link=')[1].split('&')[0]); } catch(e){}
+                // XUPALACE
+                else {
+                    const listItemsRegex = /<li[^>]*onclick=["'](go_to_playerVast|go_to_player)\(['"]([^'"]+)['"]/g;
+                    let liMatch;
+                    while ((liMatch = listItemsRegex.exec(embedHtml)) !== null) {
+                        let rawUrl = liMatch[2];
+                        if (rawUrl.includes('link=')) {
+                            try { rawUrl = atob(rawUrl.split('link=')[1].split('&')[0]); } catch(e){}
+                        }
+                        let serverName = "Server";
+                        if (rawUrl.includes('filemoon')) serverName = "Filemoon";
+                        else if (rawUrl.includes('waaw')) serverName = "Waaw";
+                        else if (rawUrl.includes('vidhide')) serverName = "Vidhide";
+                        else if (rawUrl.includes('voe')) serverName = "Voe";
+                        
+                        servers.push({ server: serverName, lang: "Latino", url: rawUrl });
                     }
-                    let serverName = "Server";
-                    if (rawUrl.includes('filemoon')) serverName = "Filemoon";
-                    else if (rawUrl.includes('waaw')) serverName = "Waaw";
-                    else if (rawUrl.includes('vidhide')) serverName = "Vidhide";
-                    else if (rawUrl.includes('voe')) serverName = "Voe";
-                    
-                    servers.push({ server: serverName, lang: "Latino", url: rawUrl });
                 }
-
                 bridge.onResult(JSON.stringify(servers));
-
             } catch (e) { bridge.onResult("[]"); }
         }
     };
