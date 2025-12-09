@@ -1,5 +1,7 @@
 package com.kronos.tv.ui
 
+import com.kronos.tv.providers.SourceLink 
+import com.kronos.tv.providers.ProviderManager
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
