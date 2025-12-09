@@ -1,4 +1,4 @@
-// KRONOS PROVIDER: SoloLatino v4.0 (Final - Soporte Redirección)
+// KRONOS PROVIDER: SoloLatino v6.0 (Dooplay Surgical Fix)
 (function() {
     const provider = {
         id: 'sololatino',
@@ -12,70 +12,80 @@
 
         search: async function(query) {
             try {
-                // Limpiamos la query: "Batman: Inicia" -> "Batman Inicia"
-                // Esto ayuda a que WordPress encuentre mejor la coincidencia
+                // 1. Preparamos la URL
                 const cleanQuery = encodeURIComponent(query.replace(/[:\-\.]/g, ' '));
                 const searchUrl = this.baseUrl + "/?s=" + cleanQuery;
                 
-                bridge.log("JS: Buscando: " + searchUrl);
+                bridge.log("JS: Buscando URL: " + searchUrl);
                 
                 let html = "";
                 try {
                     html = await bridge.fetchHtml(searchUrl);
-                } catch (netError) {
-                    bridge.log("JS: Error red: " + netError.message);
+                } catch (e) {
+                    bridge.log("JS Error: " + e.message);
                     return [];
                 }
 
                 if (!html || html.length < 100) return [];
 
                 const results = [];
+
+                // --- ESTRATEGIA QUIRÚRGICA (Basada en tu HTML) ---
+                // El HTML usa <article class="item movies"> o "item tvshows"
+                // Buscamos bloques <article ... /article>
                 
-                // --- ESTRATEGIA 1: Búsqueda Normal (Lista de resultados) ---
-                // Si el sitio nos devuelve una lista, la procesamos aquí
-                const regexList = /<article[^>]*class="[^"]*result-item[^"]*"[^>]*>[\s\S]*?<a href="([^"]+)"[\s\S]*?<img src="([^"]+)"[\s\S]*?<div class="title">([^<]+)<\/div>[\s\S]*?<span class="year">(\d{4})?<\/span>/g;
+                // Regex para encontrar cada bloque de película/serie individualmente
+                const articleRegex = /<article[^>]*class="item\s+(movies|tvshows)"[^>]*>([\s\S]*?)<\/article>/g;
                 
                 let match;
-                while ((match = regexList.exec(html)) !== null) {
-                    results.push({
-                        title: match[3].trim(),
-                        url: match[1],
-                        img: match[2],
-                        id: match[1],
-                        type: match[1].includes('/peliculas/') ? 'movie' : 'tv',
-                        year: match[4] || ""
-                    });
+                while ((match = articleRegex.exec(html)) !== null) {
+                    const typeFound = match[1]; // "movies" o "tvshows"
+                    const content = match[2]; // El HTML dentro del article
+
+                    // Extraemos datos DENTRO del bloque encontrado
+                    
+                    // 1. URL
+                    const urlMatch = content.match(/href="([^"]+)"/);
+                    if (!urlMatch) continue;
+                    
+                    // 2. Imagen (Usamos data-srcset porque src es lazy.gif)
+                    const imgMatch = content.match(/data-srcset="([^"\s]+)/) || content.match(/src="([^"]+)"/);
+                    
+                    // 3. Título (Está dentro de <h3>)
+                    const titleMatch = content.match(/<h3>([^<]+)<\/h3>/);
+                    
+                    // 4. Año (Está dentro de <p>)
+                    const yearMatch = content.match(/<p>(\d{4})<\/p>/);
+
+                    if (titleMatch) {
+                        results.push({
+                            title: titleMatch[1].trim(),
+                            url: urlMatch[1],
+                            img: imgMatch ? imgMatch[1] : "",
+                            id: urlMatch[1],
+                            type: typeFound === 'tvshows' ? 'tv' : 'movie',
+                            year: yearMatch ? yearMatch[1] : ""
+                        });
+                    }
                 }
 
-                // --- ESTRATEGIA 2: DETECCIÓN DE REDIRECCIÓN (El arreglo para tu problema) ---
-                // Si la lista está vacía, verificamos si nos mandaron directo a la película
+                // --- ESTRATEGIA RESPALDO: REDIRECCIÓN ---
+                // (Solo por si acaso WordPress decide redirigir alguna vez)
                 if (results.length === 0) {
-                    bridge.log("JS: Lista vacía. Verificando si hubo redirección directa...");
-                    
-                    // Buscamos la URL canónica (indica la url real de la página actual)
                     const canonicalMatch = html.match(/<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']/i);
-                    // Buscamos el título en los metadatos
                     const titleMatch = html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i);
-                    // Buscamos la imagen
-                    const imgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i);
-
+                    
                     if (canonicalMatch && titleMatch) {
                         const directUrl = canonicalMatch[1];
-                        
-                        // Validamos que sea una URL de contenido (no la home ni error 404)
-                        if (directUrl.includes('/peliculas/') || directUrl.includes('/episodios/') || directUrl.includes('/series/')) {
-                            bridge.log("JS: ¡REDIRECCIÓN DETECTADA! Usando página actual como resultado.");
-                            
-                            // Limpiamos el título (a veces dice "Ver Batman Online...")
-                            let rawTitle = titleMatch[1];
-                            rawTitle = rawTitle.replace(/^Ver\s+/i, '').replace(/\s+Online.*$/i, '').trim();
-
+                        if (directUrl.includes('/peliculas/') || directUrl.includes('/series/')) {
+                            bridge.log("JS: Redirección detectada.");
+                            let rawTitle = titleMatch[1].replace(/^Ver\s+/i, '').replace(/\s+Online.*$/i, '').trim();
                             results.push({
                                 title: rawTitle,
                                 url: directUrl,
-                                img: imgMatch ? imgMatch[1] : "",
+                                img: "", 
                                 id: directUrl,
-                                type: directUrl.includes('/peliculas/') ? 'movie' : 'tv',
+                                type: directUrl.includes('/series/') ? 'tv' : 'movie',
                                 year: "" 
                             });
                         }
@@ -91,7 +101,6 @@
             }
         },
 
-        // El resto sigue igual (resolveVideo)...
         resolveVideo: async function(url, type) {
             try {
                 bridge.log("JS: Resolviendo: " + url);
@@ -103,7 +112,6 @@
                 let embedUrl = iframeMatch[1];
                 if (embedUrl.startsWith("//")) embedUrl = "https:" + embedUrl;
                 
-                bridge.log("JS: Portal: " + embedUrl);
                 const embedHtml = await bridge.fetchHtml(embedUrl);
 
                 // 1. EMBED69 (JWT)
