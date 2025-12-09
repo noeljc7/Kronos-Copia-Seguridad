@@ -16,9 +16,6 @@ import org.json.JSONObject
 import java.net.URL
 import kotlin.coroutines.resume
 
-/**
- * MOTOR KRONOS V4 (Async JS Support)
- */
 object ScriptEngine {
 
     private var webView: WebView? = null
@@ -29,7 +26,6 @@ object ScriptEngine {
 
     fun initialize(context: Context) {
         if (isInitialized) return
-
         uiHandler.post {
             try {
                 webView = WebView(context)
@@ -48,18 +44,14 @@ object ScriptEngine {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-        
         wv.addJavascriptInterface(JsBridge(), "bridge")
-        
         wv.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
                 Log.d("KRONOS_JS_CONSOLE", "${cm?.message()} -- line ${cm?.lineNumber()}")
                 return true
             }
         }
-        
         wv.webViewClient = object : WebViewClient() {}
-        
         wv.evaluateJavascript(BASE_JS_ENV, null)
     }
 
@@ -69,7 +61,6 @@ object ScriptEngine {
             val manifestContent = URL(manifestUrl).readText()
             val jsonObject = JSONObject(manifestContent)
             val scriptsArray = jsonObject.getJSONArray("scripts")
-
             for (i in 0 until scriptsArray.length()) {
                 loadScriptFromUrl(scriptsArray.getString(i))
             }
@@ -104,7 +95,6 @@ object ScriptEngine {
                             result.substring(1, result.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
                         } else result
                     } else "null"
-                    
                     cont.resume(cleanResult)
                 }
             } else {
@@ -113,13 +103,13 @@ object ScriptEngine {
         }
     }
 
-    // --- FUNCIÓN CRÍTICA ACTUALIZADA (SOPORTA PROMESAS) ---
+    // --- ESTA ES LA FUNCIÓN MÁGICA QUE NECESITAS ---
     suspend fun queryProvider(providerName: String, functionName: String, args: Array<Any>): String? = suspendCancellableCoroutine { cont ->
         val argsString = args.joinToString(",") { 
             if (it is String) "'${it.replace("'", "\\'")}'" else it.toString() 
         }
 
-        // Wrapper JS para esperar promesas (async/await)
+        // Wrapper JS que espera la promesa
         val jsCode = """
             (async function() {
                 try {
@@ -135,10 +125,10 @@ object ScriptEngine {
             val wv = webView
             if (wv != null) {
                 wv.evaluateJavascript(jsCode) { result ->
-                    // Limpieza de comillas escapadas del retorno de evaluateJavascript
+                    // Limpiamos el string escapado que devuelve evaluateJavascript
                     val cleanResult = if (result != null && result != "null") {
                         if (result.startsWith("\"") && result.endsWith("\"")) {
-                            // Quitamos comillas iniciales y finales y desescapamos comillas internas
+                            // Quitamos comillas dobles externas y escapadas internas
                             result.substring(1, result.length - 1)
                                 .replace("\\\"", "\"")
                                 .replace("\\\\", "\\")
