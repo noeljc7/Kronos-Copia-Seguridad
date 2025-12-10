@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
 
 @Composable
 fun AppNavigation(providerManager: ProviderManager) { // <--- Recibimos el Manager aquí
