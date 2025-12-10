@@ -47,7 +47,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.kronos.tv.network.TmdbMovie
-import com.kronos.tv.ScreenState
 import com.kronos.tv.utils.HistoryManager
 import com.kronos.tv.utils.WatchProgress
 import com.kronos.tv.ui.viewmodels.HomeViewModel
