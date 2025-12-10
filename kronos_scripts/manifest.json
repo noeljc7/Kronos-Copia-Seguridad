@@ -1,13 +1,12 @@
 {
-  "version": 4,
+  "version": 1,
   "scripts": [
-    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/providers/voe.js",
-    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/providers/cinemitas.js"
+    "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/kronos_script/providers/sololatino.js"
   ],
   "providers": [
     {
-      "id": "Cinemitas",
-      "name": "Cinemitas HD (Remoto)"
+      "id": "sololatino",
+      "name": "SoloLatino (Nube)"
     }
   ]
 }
