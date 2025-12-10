@@ -4,13 +4,12 @@
         name: 'ZonaAps',
         baseUrl: 'https://zonaaps.com',
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            'Referer': 'https://zonaaps.com/',
-            'X-Requested-With': 'XMLHttpRequest' // ¡CRUCIAL! Sin esto, la API te bloquea
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'X-Requested-With': 'XMLHttpRequest', // Para la API
+            'Referer': 'https://zonaaps.com/'     // ¡CRUCIAL! Tu captura lo confirmó
         },
 
         search: async function(query) {
-            // Tu búsqueda HTML v3.0 funcionaba bien, la mantenemos para no complicarnos con Nonces
             try {
                 const cleanQuery = encodeURIComponent(query.replace(/[:\-\.]/g, ' '));
                 const searchUrl = this.baseUrl + "/?s=" + cleanQuery;
@@ -22,7 +21,6 @@
                 const results = [];
                 const regex = /<div class="result-item">[\s\S]*?<a href="([^"]+)"[\s\S]*?<img src="([^"]+)"[^>]*?alt="([^"]+)"/g;
                 let match;
-                
                 while ((match = regex.exec(html)) !== null) {
                     const url = match[1];
                     const img = match[2];
@@ -40,92 +38,96 @@
 
         resolveVideo: async function(url, type) {
             try {
-                bridge.log("JS [ZNA]: Escaneando página -> " + url);
+                bridge.log("JS [ZNA]: Analizando URL: " + url);
                 const html = await bridge.fetchHtml(url);
                 const servers = [];
 
-                // 1. Regex idéntico al de Kotlin para buscar los botones <li>
-                // <li id='player-option-1' ... data-post='28776' data-type='movie' data-nume='1'>
+                // BUSCAR BOTONES DE LA API (Igual que antes)
                 const liRegex = /<li[^>]+data-post=['"](\d+)['"][^>]*data-type=['"]([^"']+)['"][^>]*data-nume=['"](\d+)['"][^>]*>([\s\S]*?)<\/li>/g;
-                
                 let match;
-                // Array para guardar las promesas (peticiones) y hacerlas todas juntas
                 const apiRequests = [];
 
                 while ((match = liRegex.exec(html)) !== null) {
                     const postId = match[1];
                     const pType = match[2];
                     const nume = match[3];
-                    const content = match[4]; // Contenido para sacar el nombre del server
+                    const content = match[4];
 
-                    // Filtramos el trailer
                     if (nume === "trailer") continue;
 
-                    // Extraer nombre del servidor (igual que en Kotlin)
-                    let serverName = "Server";
+                    let serverName = "Opción " + nume;
                     const titleMatch = content.match(/<span class=['"]title['"]>(.*?)<\/span>/);
-                    if (titleMatch) serverName = titleMatch[1].replace("🔒", "").trim();
+                    if (titleMatch) serverName = titleMatch[1].replace(/🔒/g, "").trim();
 
-                    // Detectar idioma (igual que en Kotlin)
                     let lang = "Latino";
-                    const lowerContent = content.toLowerCase();
-                    if (lowerContent.includes("castellano") || lowerContent.includes("es.png")) lang = "Castellano";
-                    else if (lowerContent.includes("sub") || lowerContent.includes("en.png")) lang = "Subtitulado";
+                    if (content.toLowerCase().includes("sub")) lang = "Subtitulado";
+                    else if (content.toLowerCase().includes("castellano") || content.includes("es.png")) lang = "Castellano";
 
-                    bridge.log(`JS [ZNA]: Encontrada Opción ${nume} (${serverName})`);
-
-                    // 2. CONSTRUIR URL MÁGICA (La joya del código Kotlin)
                     const apiUrl = `${this.baseUrl}/wp-json/dooplayer/v2/${postId}/${pType}/${nume}`;
-                    
-                    // Añadimos la tarea de ir a buscar el link real
-                    apiRequests.push(this.fetchApiLink(apiUrl, serverName, lang));
+                    apiRequests.push(this.processServer(apiUrl, serverName, lang));
                 }
 
-                // Esperamos a que todas las peticiones a la API terminen
                 if (apiRequests.length > 0) {
-                    bridge.log(`JS [ZNA]: Consultando API para ${apiRequests.length} servidores...`);
-                    const resolvedServers = await Promise.all(apiRequests);
-                    // Filtramos los nulos (los que fallaron) y agregamos al array final
-                    resolvedServers.forEach(s => { if (s) servers.push(s); });
+                    const resolved = await Promise.all(apiRequests);
+                    resolved.forEach(s => { if(s) servers.push(s); });
+                }
+
+                // SI TODO FALLA, MODO WEB
+                if (servers.length === 0) {
+                    bridge.log("JS [ZNA]: Fallo extracción nativa. Usando Web.");
+                    servers.push({ server: "ZonaAps (Web)", lang: "Latino", url: url, requiresWebView: true });
                 }
 
                 bridge.onResult(JSON.stringify(servers));
 
-            } catch (e) { 
-                bridge.log("JS [ZNA]: Error -> " + e.message);
-                bridge.onResult("[]"); 
-            }
+            } catch (e) { bridge.onResult("[]"); }
         },
 
-        // Función auxiliar para llamar a la API REST
-        fetchApiLink: async function(apiUrl, serverName, lang) {
+        // --- FUNCIÓN DE EXTRACTOR DE DOBLE PASO ---
+        processServer: async function(apiUrl, serverName, lang) {
             try {
-                // Hacemos fetch a la API. El puente usará los headers definidos arriba (X-Requested-With)
+                // PASO 1: Pedir a la API el link del embed (zonaaps-player.xyz)
                 const jsonStr = await bridge.fetchHtml(apiUrl);
-                const json = JSON.parse(jsonStr);
+                if (!jsonStr || jsonStr.trim().startsWith("<")) return null;
                 
-                // Kotlin buscaba "embed_url" o "u"
-                const targetUrl = json.embed_url || json.u;
+                const json = JSON.parse(jsonStr);
+                const embedUrl = json.embed_url || json.u;
 
-                if (targetUrl) {
-                    // Determinar si necesita WebView
-                    const isDirect = targetUrl.endsWith(".mp4") || targetUrl.endsWith(".m3u8");
+                if (!embedUrl) return null;
+
+                // PASO 2: Si es el reproductor propio, entramos a robar el MP4
+                if (embedUrl.includes("zonaaps-player.xyz") || embedUrl.includes("1a-1791.com")) {
+                    bridge.log("JS [ZNA]: Extrayendo MP4 de: " + embedUrl);
                     
-                    return {
-                        server: serverName,
-                        lang: lang,
-                        url: targetUrl,
-                        requiresWebView: !isDirect
-                    };
+                    // Aquí el Bridge usará el Referer: zonaaps.com (Crucial por tu captura)
+                    const playerHtml = await bridge.fetchHtml(embedUrl);
+                    
+                    // Buscamos: file: "https://...mp4"
+                    const mp4Match = playerHtml.match(/file:\s*["']([^"']+\.mp4)["']/);
+                    
+                    if (mp4Match) {
+                        return {
+                            server: serverName + " (Nativo)",
+                            lang: lang,
+                            url: mp4Match[1], // ¡EL ENLACE PURO!
+                            requiresWebView: false // ¡REPRODUCTOR NATIVO!
+                        };
+                    }
                 }
-            } catch (e) {
-                // bridge.log("Fallo API individual: " + apiUrl);
-            }
-            return null;
+
+                // Si no pudimos sacar el MP4, devolvemos el embed (necesitará WebView)
+                const isDirect = embedUrl.endsWith(".mp4") || embedUrl.endsWith(".m3u8");
+                return {
+                    server: serverName,
+                    lang: lang,
+                    url: embedUrl,
+                    requiresWebView: !isDirect
+                };
+
+            } catch (e) { return null; }
         },
 
         resolveEpisode: async function(url, season, episode) {
-            // (Misma lógica v2.0 - funciona bien)
             try {
                 if (url.includes('/tvshows/')) {
                     const html = await bridge.fetchHtml(url);
