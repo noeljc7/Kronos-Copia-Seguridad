@@ -1,177 +1,139 @@
-// KRONOS PROVIDER: SoloLatino v13.0 (Year Fix + Hybrid Extraction)
+// KRONOS PROVIDER: SoloLatino v14.0 
 (function() {
     const provider = {
         id: 'sololatino',
         name: 'SoloLatino',
         baseUrl: 'https://sololatino.net',
-        headers: {'User-Agent': 'Mozilla/5.0 (Linux; Android 10)'},
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10)',
+            'Referer': 'https://sololatino.net/'
+        },
 
         search: async function(query) {
             try {
-                const cleanQuery = encodeURIComponent(query.replace(/[:\-\.]/g, ' '));
-                const searchUrl = this.baseUrl + "/?s=" + cleanQuery;
-                bridge.log("JS: Buscando: " + searchUrl);
+                // 1. LIMPIEZA INTELIGENTE DEL TÍTULO
+                // Quitamos años, "la película", "parte", etc. para que la búsqueda sea más efectiva
+                let smartQuery = query
+                    .replace(/\(\d{4}\)/g, '') // Quitar año (2025)
+                    .replace(/la película/gi, '')
+                    .replace(/el arco/gi, '')
+                    .replace(/[:\-\.]/g, ' ') // Quitar signos raros
+                    .trim();
+
+                // Si el título quedó muy corto, usamos el original, si no, usamos el limpio
+                const finalQuery = (smartQuery.length > 2) ? smartQuery : query;
                 
-                let html = "";
-                try { html = await bridge.fetchHtml(searchUrl); } catch (e) { return []; }
-                if (!html || html.length < 100) return [];
-                
+                const searchUrl = this.baseUrl + "/?s=" + encodeURIComponent(finalQuery);
+                bridge.log("JS [SL]: Buscando limpio: " + finalQuery);
+
+                let html = await bridge.fetchHtml(searchUrl);
                 const results = [];
-                // Regex mejorado para capturar bloques de peliculas
-                const articleRegex = /<article[^>]*class="item\s+(movies|tvshows)"[^>]*>([\s\S]*?)<\/article>/g;
+
+                // 2. REGEX PARA RESULTADOS (Dooplay Clásico)
+                const regex = /<article[^>]*>[\s\S]*?<a href="([^"]+)"[^>]*>[\s\S]*?<img src="([^"]+)"[^>]*?alt="([^"]+)"/g;
+                
                 let match;
-                
-                while ((match = articleRegex.exec(html)) !== null) {
-                    const content = match[2];
-                    const urlMatch = content.match(/href="([^"]+)"/);
-                    // Soporte para lazy load images
-                    const imgMatch = content.match(/data-srcset="([^"\s]+)/) || content.match(/src="([^"]+)"/);
-                    const titleMatch = content.match(/<h3>([^<]+)<\/h3>/);
+                while ((match = regex.exec(html)) !== null) {
+                    const url = match[1];
+                    const img = match[2];
+                    const fullTitle = match[3];
                     
-                    // --- ARREGLO DEL AÑO ---
-                    // Buscamos 4 dígitos dentro de p, span o div class="year"
-                    // Ej: <p>2024</p> o <span class="year">2024</span>
-                    let yearMatch = content.match(/<(?:p|span|div)[^>]*>(\d{4})<\/(?:p|span|div)>/);
-                    if (!yearMatch) yearMatch = content.match(/(\d{4})/); // Último recurso: cualquier 4 dígitos
-                    
-                    if (urlMatch && titleMatch) {
-                        results.push({
-                            title: titleMatch[1].trim(),
-                            url: urlMatch[1],
-                            img: imgMatch ? imgMatch[1] : "",
-                            id: urlMatch[1],
-                            type: match[1] === 'tvshows' ? 'tv' : 'movie',
-                            year: yearMatch ? yearMatch[1] : "0" // Si falla, 0
-                        });
+                    let title = fullTitle;
+                    let year = "0";
+
+                    // Extraer año si existe
+                    const yearMatch = fullTitle.match(/(\d{4})/);
+                    if (yearMatch) {
+                        year = yearMatch[1];
+                        title = fullTitle.replace(year, '').replace('()', '').trim();
                     }
+
+                    // Filtrar si es película o serie
+                    let type = 'movie';
+                    if (url.includes('/series/') || url.includes('/episodios/') || url.includes('/animes/')) {
+                        type = 'tv';
+                    }
+
+                    results.push({
+                        title: title,
+                        url: url,
+                        img: img,
+                        id: url,
+                        type: type,
+                        year: year
+                    });
                 }
                 
-                // Fallback Redirección (Si WordPress manda directo al post)
-                if (results.length === 0) {
-                    const canonicalMatch = html.match(/<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']/i);
-                    const titleMatch = html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i);
-                    if (canonicalMatch && titleMatch) {
-                        const directUrl = canonicalMatch[1];
-                        if (directUrl.includes('/peliculas/') || directUrl.includes('/series/')) {
-                            let rawTitle = titleMatch[1].replace(/^Ver\s+/i, '').replace(/\s+Online.*$/i, '').trim();
-                            // Intentar sacar año del meta title o dejar 0
-                            results.push({ title: rawTitle, url: directUrl, img: "", id: directUrl, type: 'movie', year: "0" });
-                        }
-                    }
-                }
                 bridge.onResult(JSON.stringify(results));
             } catch (e) { bridge.onResult("[]"); }
         },
 
-        resolveEpisode: async function(showUrl, season, episode) {
-            // (Misma lógica v12, funciona bien)
-            try {
-                bridge.log("JS: Buscando episodio " + season + "x" + episode);
-                const html = await bridge.fetchHtml(showUrl);
-                const epPad = episode < 10 ? "0" + episode : episode;
-                const pattern1 = new RegExp(season + "x" + episode + "[^0-9]", "i");
-                const pattern2 = new RegExp(season + "x" + epPad + "[^0-9]", "i");
-                const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/g;
-                let linkMatch;
-                let episodeUrl = null;
-                while ((linkMatch = linkRegex.exec(html)) !== null) {
-                    const href = linkMatch[1];
-                    const text = linkMatch[2];
-                    if (!href.includes('/episodios/')) continue;
-                    if (pattern1.test(text) || pattern2.test(text) || pattern1.test(href) || pattern2.test(href)) {
-                        episodeUrl = href;
-                        break;
-                    }
-                }
-                if (episodeUrl) {
-                    bridge.log("JS: Episodio encontrado: " + episodeUrl);
-                    await this.resolveVideo(episodeUrl, "tv");
-                } else {
-                    bridge.log("JS: ❌ Episodio no encontrado.");
-                    bridge.onResult("[]");
-                }
-            } catch (e) { bridge.onResult("[]"); }
-        },
-
-        // --- ARREGLO DRÁCULA (EXTRACCIÓN HÍBRIDA) ---
         resolveVideo: async function(url, type) {
             try {
-                bridge.log("JS: Extrayendo de: " + url);
+                bridge.log("JS [SL]: Extrayendo de: " + url);
                 const html = await bridge.fetchHtml(url);
                 const servers = [];
 
-                // Función auxiliar para escanear HTML buscando servidores
-                const scanHtml = (sourceHtml, sourceName) => {
-                    // 1. EMBED69
-                    if (sourceHtml.includes('eyJ')) {
-                        const jsonMatch = sourceHtml.match(/let dataLink = (\[.*?\]);/);
-                        if (jsonMatch) {
-                            try {
-                                const data = JSON.parse(jsonMatch[1]);
-                                data.forEach(group => {
-                                    const lang = group.video_language || "Latino";
-                                    if (group.sortedEmbeds) {
-                                        group.sortedEmbeds.forEach(srv => {
-                                            const sName = srv.servername.toLowerCase();
-                                            if (sName.includes("download") || sName.includes("descarga")) return;
-                                            try {
-                                                const parts = srv.link.split('.');
-                                                const payload = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
-                                                const linkData = JSON.parse(payload);
-                                                servers.push({ server: srv.servername, lang: lang, url: linkData.link });
-                                            } catch(e){}
-                                        });
-                                    }
-                                });
-                            } catch(e){}
-                        }
-                    }
+                // 1. BUSCAR IFRAMES DIRECTOS (SoloLatino suele tenerlos visibles)
+                const iframeRegex = /<iframe[^>]*src=["']([^"']+)["'][^>]*>/g;
+                let m;
+                while ((m = iframeRegex.exec(html)) !== null) {
+                    let src = m[1];
+                    if (src.startsWith("//")) src = "https:" + src;
                     
-                    // 2. XUPALACE / LISTA DE ITEMS (go_to_player)
-                    const listRegex = /<li[^>]*onclick=["'](go_to_playerVast|go_to_player)\(['"]([^'"]+)['"]/g;
-                    let m;
-                    while ((m = listRegex.exec(sourceHtml)) !== null) {
-                        let rawUrl = m[2];
-                        if (rawUrl.includes('link=')) {
-                            try { rawUrl = atob(rawUrl.split('link=')[1].split('&')[0]); } catch(e){}
-                        }
-                        // Detectar nombre
-                        let name = "Server";
-                        if (rawUrl.includes('filemoon')) name = "Filemoon";
-                        else if (rawUrl.includes('waaw')) name = "Waaw";
-                        else if (rawUrl.includes('vidhide')) name = "Vidhide";
-                        else if (rawUrl.includes('voe')) name = "Voe";
-                        else if (rawUrl.includes('streamwish')) name = "Streamwish";
-                        
-                        // Evitar duplicados exactos
-                        if (!servers.some(s => s.url === rawUrl)) {
-                            servers.push({ server: name, lang: "Latino", url: rawUrl });
-                        }
-                    }
-                };
+                    // Filtros de basura
+                    if (src.includes('facebook') || src.includes('twitter')) continue;
 
-                // PASO 1: Escanear la página PRINCIPAL (Aquí suelen estar los <li> de Drácula)
-                scanHtml(html, "MainPage");
+                    let name = "Server";
+                    let requiresWeb = true; // Por defecto webview
 
-                // PASO 2: Buscar iframe y escanearlo también (Si existe)
-                const iframeMatch = html.match(/<iframe[^>]*\s(src|data-src)=["']([^"']+)["'][^>]*>/i);
-                if (iframeMatch) {
-                    let embedUrl = iframeMatch[2];
-                    if (embedUrl.startsWith("//")) embedUrl = "https:" + embedUrl;
-                    bridge.log("JS: Escaneando iframe: " + embedUrl);
-                    try {
-                        const embedHtml = await bridge.fetchHtml(embedUrl);
-                        scanHtml(embedHtml, "Iframe");
-                    } catch(e) { bridge.log("JS: Error cargando iframe"); }
+                    if (src.includes('sololatino')) name = "Nativo";
+                    else if (src.includes('embed69')) { name = "Embed69"; requiresWeb = false; }
+                    else if (src.includes('streamwish')) name = "Streamwish";
+                    else if (src.includes('filemoon')) name = "Filemoon";
+                    else if (src.includes('waaw')) name = "Waaw";
+                    else if (src.includes('dood')) name = "Doodstream";
+
+                    servers.push({
+                        server: name,
+                        lang: "Latino", // SoloLatino es casi 100% Latino
+                        url: src,
+                        requiresWebView: requiresWeb
+                    });
                 }
 
-                bridge.log("JS: Total servidores: " + servers.length);
-                bridge.onResult(JSON.stringify(servers));
+                // 2. BUSCAR ENLACES EN LISTA (Si están ocultos en botones)
+                // Estructura típica: <li data-post="123" data-nume="1">
+                if (servers.length === 0) {
+                     // Si no encontramos iframes, probamos buscar la tabla de opciones
+                     if (html.includes('id="playeroptionsul"') || html.includes('class="dooplay_player_option"')) {
+                        bridge.log("JS [SL]: Menú de opciones detectado. Usando modo Web.");
+                        servers.push({
+                            server: "SoloLatino (Web)",
+                            lang: "Latino",
+                            url: url,
+                            requiresWebView: true
+                        });
+                     }
+                }
 
-            } catch (e) { 
-                bridge.log("JS CRASH: " + e.message);
-                bridge.onResult("[]"); 
-            }
+                bridge.onResult(JSON.stringify(servers));
+            } catch (e) { bridge.onResult("[]"); }
+        },
+
+        resolveEpisode: async function(url, season, episode) {
+            try {
+                // SoloLatino usa urls tipo: /episodios/nombre-serie-1x1/
+                if (url.includes('/series/')) {
+                    const slug = url.split('/series/')[1].replace('/', '');
+                    // Construcción manual de la URL del episodio
+                    const episodeUrl = `${this.baseUrl}/episodios/${slug}-${season}x${episode}/`;
+                    bridge.log("JS [SL]: Intentando episodio: " + episodeUrl);
+                    await this.resolveVideo(episodeUrl, 'tv');
+                } else {
+                    await this.resolveVideo(url, 'tv');
+                }
+            } catch (e) { bridge.onResult("[]"); }
         }
     };
 
