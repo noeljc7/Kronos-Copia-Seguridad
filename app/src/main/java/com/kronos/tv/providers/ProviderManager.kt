@@ -2,6 +2,7 @@ package com.kronos.tv.providers
 
 import android.content.Context
 import android.util.Log
+import com.kronos.tv.ScreenLogger // Importamos el Logger de MainActivity
 import com.kronos.tv.engine.ScriptEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,7 +11,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 
-// --- CLASE SOURCELINK ---
 data class SourceLink(
     val name: String,
     val url: String,
@@ -23,7 +23,6 @@ data class SourceLink(
 
 class ProviderManager(private val context: Context) {
 
-    // Lista vacía al inicio (se llena con JS local o remoto)
     private val providers = mutableListOf<KronosProvider>()
 
     companion object {
@@ -31,20 +30,31 @@ class ProviderManager(private val context: Context) {
         private var isRemoteLoaded = false
 
         suspend fun loadRemoteProviders(manifestUrl: String) = withContext(Dispatchers.IO) {
-            if (isRemoteLoaded) return@withContext
+            if (isRemoteLoaded) {
+                ScreenLogger.log("KRONOS", "⚠️ Ya se había cargado la nube. Omitiendo.")
+                return@withContext
+            }
+            
             try {
+                ScreenLogger.log("KRONOS", "☁️ Descargando Manifest...")
                 val jsonStr = URL(manifestUrl).readText()
+                ScreenLogger.log("KRONOS", "✅ Manifest descargado. Tamaño: ${jsonStr.length} chars")
+                
                 val json = JSONObject(jsonStr)
 
                 if (json.has("scripts")) {
                     val scripts = json.getJSONArray("scripts")
+                    ScreenLogger.log("KRONOS", "📜 Encontrados ${scripts.length()} scripts")
                     for (i in 0 until scripts.length()) {
-                        ScriptEngine.loadScriptFromUrl(scripts.getString(i))
+                        val scriptUrl = scripts.getString(i)
+                        ScreenLogger.log("KRONOS", "⬇️ Bajando script: $scriptUrl")
+                        ScriptEngine.loadScriptFromUrl(scriptUrl)
                     }
                 }
 
                 if (json.has("providers")) {
                     val remoteList = json.getJSONArray("providers")
+                    ScreenLogger.log("KRONOS", "⚙️ Configurando ${remoteList.length()} proveedores")
                     for (i in 0 until remoteList.length()) {
                         val p = remoteList.getJSONObject(i)
                         val id = p.getString("id")
@@ -52,13 +62,16 @@ class ProviderManager(private val context: Context) {
                         
                         if (remoteProviders.none { it.name == id }) {
                             remoteProviders.add(JsContentProvider(id, name))
-                            Log.d("KRONOS", "Remoto cargado: $name")
+                            ScreenLogger.log("KRONOS", "✅ PROVEEDOR REGISTRADO: $id")
                         }
                     }
                 }
                 isRemoteLoaded = true
+                ScreenLogger.log("KRONOS", "🎉 ¡Carga remota EXITOSA!")
+
             } catch (e: Exception) {
-                Log.e("KRONOS", "Error carga remota: ${e.message}")
+                ScreenLogger.log("ERROR", "❌ FALLO NUBE: ${e.message}")
+                e.printStackTrace()
             }
         }
     }
@@ -80,7 +93,7 @@ class ProviderManager(private val context: Context) {
 
                 withContext(Dispatchers.Main) {
                     ScriptEngine.loadScript(jsCode)
-                    Log.d("KRONOS", "✅ JS Local Inyectado: sololatino.js")
+                    ScreenLogger.log("KRONOS", "💿 JS Local (Assets) Inyectado")
 
                     val providerId = "sololatino"
                     if (providers.none { it.name == providerId }) {
@@ -89,41 +102,46 @@ class ProviderManager(private val context: Context) {
                         if (remoteProviders.none { it.name == providerId }) {
                             remoteProviders.add(localJsProvider)
                         }
-                        Log.d("KRONOS", "✅ Provider SoloLatino registrado")
+                        ScreenLogger.log("KRONOS", "💿 Provider Local Registrado")
                     }
                 }
             } catch (e: java.io.FileNotFoundException) {
-                Log.w("KRONOS", "⚠️ No se encontró 'sololatino.js' en assets.")
+                ScreenLogger.log("ALERTA", "⚠️ No existe 'sololatino.js' en assets (Modo Nube puro)")
             } catch (e: Exception) {
-                Log.e("KRONOS", "❌ Error cargando asset local: ${e.message}")
+                ScreenLogger.log("ERROR", "❌ Error Asset Local: ${e.message}")
             }
         }
     }
 
-    // --- FUNCIÓN ACTUALIZADA (Recibe originalTitle y year) ---
     suspend fun getLinks(
         tmdbId: Int, 
         title: String, 
-        originalTitle: String, // <--- NUEVO
+        originalTitle: String, 
         isMovie: Boolean, 
-        year: Int,             // <--- NUEVO
+        year: Int,             
         season: Int = 0, 
         episode: Int = 0
     ): List<SourceLink> = withContext(Dispatchers.IO) {
         
+        ScreenLogger.log("KRONOS", "🔍 Buscando: $title ($year)")
         val allLinks = mutableListOf<SourceLink>()
         
+        if (providers.isEmpty()) {
+            ScreenLogger.log("ERROR", "❌ NO HAY PROVEEDORES CARGADOS")
+        }
+
         for (provider in providers) {
             try {
+                ScreenLogger.log("KRONOS", "👉 Consultando a: ${provider.name}")
                 val links = if (isMovie) {
-                    // Pasamos todos los datos al provider
                     provider.getMovieLinks(tmdbId, title, originalTitle, year)
                 } else {
                     provider.getEpisodeLinks(tmdbId, title, season, episode)
                 }
+                ScreenLogger.log("KRONOS", "✅ ${provider.name}: ${links.size} enlaces")
                 allLinks.addAll(links)
             } catch (e: Exception) {
-                Log.e("KRONOS", "Fallo en ${provider.name}: ${e.message}")
+                ScreenLogger.log("ERROR", "❌ Fallo ${provider.name}: ${e.message}")
             }
         }
         return@withContext allLinks.sortedByDescending { it.quality }
