@@ -1,6 +1,7 @@
 package com.kronos.tv.providers
 
 import android.util.Log
+import com.kronos.tv.ScreenLogger // Importante para ver logs en pantalla
 import com.kronos.tv.engine.ScriptEngine
 import com.kronos.tv.models.SearchResult
 import com.kronos.tv.models.Episode
@@ -17,83 +18,97 @@ class JsContentProvider(
 
     override val language = "Multi"
 
-    // --- PELÍCULAS (Ya funciona perfecto) ---
     override suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink> {
-        val bestMatch = findBestMatch(title, originalTitle, year, "movie") ?: return emptyList()
-        Log.d("KRONOS", "🎯 Película Ganadora: '${bestMatch.title}'")
+        val bestMatch = findBestMatch(title, originalTitle, year, "movie")
         
+        if (bestMatch == null) {
+            ScreenLogger.log("KRONOS", "⛔ ${name}: Ningún candidato pasó el filtro de año/nombre.")
+            return emptyList()
+        }
+
+        ScreenLogger.log("KRONOS", "🎯 ${name}: Ganador '${bestMatch.title}' (${bestMatch.year})")
         val jsonServers = loadStream(bestMatch.id, "movie") ?: "[]"
         return parseServers(jsonServers)
     }
 
-    // --- SERIES (NUEVA LÓGICA) ---
     override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
-        // 1. Buscamos la SERIE primero (Usamos año 0 o el real si lo tienes, pero el nombre suele bastar)
-        // Nota: Para series, el año es 'first_air_date', a veces es mejor ser flexible con el año en series.
-        Log.d("KRONOS", "📺 Buscando Serie: '$showTitle' T$season E$episode")
-        
+        // En series no filtramos tan estricto por año porque a veces TMDB tiene la fecha del primer cap y la web la del último
         val bestMatch = findBestMatch(showTitle, showTitle, 0, "tv") 
         
         if (bestMatch == null) {
-            Log.e("KRONOS", "❌ No se encontró la serie: $showTitle")
+            ScreenLogger.log("KRONOS", "❌ ${name}: No se encontró la serie '$showTitle'")
             return emptyList()
         }
 
-        Log.d("KRONOS", "✅ Serie Encontrada: '${bestMatch.title}'. Buscando episodio...")
-
-        // 2. Pedimos al JS que busque el episodio DENTRO de la página de la serie
-        // Le pasamos la URL de la serie y los números de S y E
+        ScreenLogger.log("KRONOS", "📺 ${name}: Serie encontrada. Buscando ${season}x${episode}...")
         val jsonServers = loadEpisodeStream(bestMatch.id, season, episode) ?: "[]"
-        
         return parseServers(jsonServers)
     }
 
-    // --- LÓGICA DE BÚSQUEDA CENTRALIZADA (Reutilizable) ---
     private suspend fun findBestMatch(title: String, originalTitle: String, year: Int, type: String): SearchResult? {
-        // FASE 1: Español
+        // 1. Obtener resultados crudos
         var results = search(title)
-        
-        // FASE 2: Inglés
-        if (results.isEmpty() && title != originalTitle) {
-            results = search(originalTitle)
-        }
-
-        // FASE 3: Corta
-        if (results.isEmpty() && title.contains(":")) {
-            val shortTitle = title.substringBefore(":").trim()
-            if (shortTitle.length > 3) results = search(shortTitle)
-        }
+        if (results.isEmpty() && title != originalTitle) results = search(originalTitle)
+        if (results.isEmpty() && title.contains(":")) results = search(title.substringBefore(":").trim())
 
         if (results.isEmpty()) return null
 
-        // FILTRADO INTELIGENTE
         val targetEs = normalize(title)
         val targetEn = normalize(originalTitle)
+
+        // 2. FILTRADO ESTRICTO
+        // Filtramos la lista para quedarnos solo con los que valen la pena
+        val candidates = results.filter { it.type == type }
         
-        return results.filter { it.type == type }.minByOrNull { cand ->
-            val current = normalize(cand.title ?: "")
-            val cYear = cand.year?.toIntOrNull() ?: 0
+        ScreenLogger.log("KRONOS", "🧐 ${name}: Analizando ${candidates.size} candidatos para '$title' ($year)")
+
+        val bestMatch = candidates.minByOrNull { cand ->
+            val currentTitle = normalize(cand.title ?: "")
+            val candYear = cand.year?.toIntOrNull() ?: 0
             
+            // PUNTUACIÓN DE NOMBRE (Menos es mejor)
             var score = 1000
-            if (current == targetEs || current == targetEn) score = 0
-            else if (current.contains(targetEs) || targetEs.contains(current)) score = 10
-            else if (current.contains(targetEn) || targetEn.contains(current)) score = 10
-            
-            // Filtro de año (Solo si se provee y es válido)
-            if (year > 0 && cYear > 0) {
-                val diff = abs(year - cYear)
-                score += when (diff) {
-                    0 -> 0; 1 -> 5; else -> 500
+            if (currentTitle == targetEs || currentTitle == targetEn) score = 0
+            else if (currentTitle.contains(targetEs) || targetEs.contains(currentTitle)) score = 10
+            else score = 100 // No se parece mucho
+
+            // PUNTUACIÓN DE AÑO (CRÍTICO) 🛡️
+            if (year > 0) {
+                if (candYear > 0) {
+                    val diff = abs(year - candYear)
+                    if (diff > 2) score += 5000 // Penalización MÁXIMA (Bloqueo)
+                    else if (diff == 1) score += 5
+                    // Si diff == 0, score no cambia (perfecto)
+                } else {
+                    // Si el resultado NO tiene año (0), penalizamos un poco por sospechoso,
+                    // pero no lo bloqueamos totalmente si el nombre es idéntico.
+                    score += 50 
                 }
             }
             score
         }
+
+        // 3. VEREDICTO FINAL
+        if (bestMatch != null) {
+            val candYear = bestMatch.year?.toIntOrNull() ?: 0
+            
+            // Si el mejor candidato tiene una puntuación altísima, es que falló en año o nombre
+            // Score > 4000 significa que el año difiere en más de 2
+            if (year > 0 && candYear > 0 && abs(year - candYear) > 2) {
+                ScreenLogger.log("ALERTA", "⛔ ${name}: Bloqueado '${bestMatch.title}' ($candYear). Buscabas ($year).")
+                return null
+            }
+        }
+
+        return bestMatch
     }
 
-    // --- PUENTES CON JS ---
-
+    // ... (El resto de funciones: loadEpisodeStream, loadStream, search, parseServers, normalize, parseResults SIGUEN IGUAL) ...
+    // Asegúrate de copiar el resto del archivo que ya tenías o usar el del mensaje anterior para estas funciones auxiliares.
+    // Solo cambiamos la lógica de getMovieLinks y findBestMatch.
+    
+    // --- COPIA AQUÍ EL RESTO DE FUNCIONES DEL ARCHIVO ANTERIOR ---
     private suspend fun loadEpisodeStream(url: String, season: Int, episode: Int): String? = withContext(Dispatchers.IO) {
-        // Nueva función en JS para episodios
         val res = ScriptEngine.queryProvider(name, "resolveEpisode", arrayOf(url, season, episode))
         return@withContext if (res != "null" && res != null) res.trim() else null
     }
@@ -108,9 +123,6 @@ class JsContentProvider(
         return@withContext parseResults(json ?: "[]")
     }
 
-    // ... (Resto de métodos auxiliares iguales: parseServers, normalize, parseResults, loadEpisodes) ...
-    // Asegúrate de incluir parseServers, normalize, etc. del código anterior.
-    
     private fun parseServers(json: String): List<SourceLink> {
         val links = mutableListOf<SourceLink>()
         try {
@@ -119,7 +131,7 @@ class JsContentProvider(
                 val s = array.getJSONObject(i)
                 val rawName = s.optString("server", "Server")
                 val sName = rawName.replaceFirstChar { it.uppercase() } 
-                val isWeb = sName.contains("Waaw") || sName.contains("Filemoon") || sName.contains("Voe") || sName.contains("Streamwish")
+                val isWeb = sName.contains("Waaw") || sName.contains("Filemoon") || sName.contains("Voe") || sName.contains("Streamwish") || s.optBoolean("requiresWebView", false)
                 
                 links.add(SourceLink(
                     name = sName,
@@ -131,7 +143,7 @@ class JsContentProvider(
                     requiresWebView = isWeb
                 ))
             }
-        } catch (e: Exception) { Log.e("KRONOS", "Error parsing: $e") }
+        } catch (e: Exception) { ScreenLogger.log("ERROR", "JS Parse: ${e.message}") }
         return links
     }
 
