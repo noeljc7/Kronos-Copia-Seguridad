@@ -9,7 +9,7 @@ import androidx.compose.ui.Modifier
 import com.kronos.tv.network.TmdbMovie
 import com.kronos.tv.providers.ProviderManager
 
-// Definimos los estados aquí para que sean accesibles
+// --- AQUÍ VIVE AHORA EL SCREEN STATE ---
 enum class ScreenState { 
     HOME, DETAILS, SELECTION, PLAYER, SEARCH, SEASONS, EPISODES, 
     MOVIES_CATALOG, SERIES_CATALOG, GENRE_GRID, FAVORITES 
@@ -17,7 +17,7 @@ enum class ScreenState {
 
 @Composable
 fun AppNavigation(providerManager: ProviderManager) {
-    // --- TU LÓGICA ORIGINAL DE NAVEGACIÓN ---
+    // --- TU LÓGICA ORIGINAL ---
     val backStack = remember { mutableStateListOf(ScreenState.HOME) }
     val currentScreen = backStack.last()
 
@@ -63,7 +63,6 @@ fun AppNavigation(providerManager: ProviderManager) {
                 },
                 onNavigate = { screen -> navigateTo(screen) },
                 onResumeClick = { historyItem -> 
-                    // Reconstrucción del objeto película
                     selectedMovie = TmdbMovie(
                         id = historyItem.tmdbId,
                         title = if(historyItem.isMovie) historyItem.title else null,
@@ -73,7 +72,6 @@ fun AppNavigation(providerManager: ProviderManager) {
                         backdrop_path = historyItem.backdropUrl.replace("https://image.tmdb.org/t/p/original", ""),
                         vote_average = 0.0,
                         media_type = if(historyItem.isMovie) "movie" else "tv",
-                        // Datos seguros
                         original_title = null,
                         original_name = null,
                         release_date = null,
@@ -161,18 +159,16 @@ fun AppNavigation(providerManager: ProviderManager) {
 
         ScreenState.SELECTION -> {
             if (selectedMovie != null) {
-                // AQUÍ ES DONDE PASAMOS EL CEREBRO (ProviderManager)
+                // INYECCIÓN DEL CEREBRO JS
                 SourceSelectionScreen(
                     tmdbId = selectedMovie!!.id,
                     title = selectedMovie!!.getDisplayTitle(),
-                    // Datos inteligentes para el buscador
                     originalTitle = selectedMovie!!.getOriginalTitleSafe(),
                     year = selectedMovie!!.getYearSafe(),
-                    
                     isMovie = selectedMovie!!.media_type != "tv",
                     season = selectedSeasonNum, 
                     episode = selectedEpisodeNum,
-                    providerManager = providerManager, // <--- ¡AQUÍ ESTÁ!
+                    providerManager = providerManager, // <--- AQUÍ
                     onLinkSelected = { url, _ ->
                         videoUrlToPlay = url
                         navigateTo(ScreenState.PLAYER)
