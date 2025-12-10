@@ -11,153 +11,100 @@
                 const searchUrl = this.baseUrl + "/?s=" + cleanQuery;
                 bridge.log("JS: Buscando: " + searchUrl);
 
-                let html = "";
-                try { html = await bridge.fetchHtml(searchUrl); } catch (e) { return []; }
+                let html = await bridge.fetchHtml(searchUrl);
                 if (!html || html.length < 100) return [];
 
                 const results = [];
                 
-                // --- REGEX BASADO EN TU CAPTURA DE PANTALLA ---
-                // Estructura: <div class="result-item"> ... <a href="..."> ... <img src="..." alt="Titulo (Año)"> ... <span class="type">
+                // Regex basado en tu captura: <div class="result-item"> ... <a href> ... <img alt="Titulo (Año)">
+                const regex = /<div class="result-item">[\s\S]*?<a href="([^"]+)"[\s\S]*?<img src="([^"]+)"[^>]*?alt="([^"]+)"/g;
                 
-                // 1. Buscamos cada bloque "result-item" individualmente
-                const itemRegex = /<div class="result-item">([\s\S]*?)<\/article>/g;
-                let itemMatch;
-
-                while ((itemMatch = itemRegex.exec(html)) !== null) {
-                    const content = itemMatch[1]; // El HTML de una sola película
-
-                    // 2. Extraer URL
-                    const urlMatch = content.match(/href="([^"]+)"/);
+                let match;
+                while ((match = regex.exec(html)) !== null) {
+                    const url = match[1];
+                    const img = match[2];
+                    const fullTitle = match[3]; // "The Batman (2022)"
                     
-                    // 3. Extraer Imagen y Datos del ALT
-                    // El alt suele ser "Titulo (Año)" o solo "Titulo"
-                    const imgMatch = content.match(/<img[^>]+src="([^"]+)"[^>]+alt="([^"]+)"/);
-                    
-                    // 4. Extraer Tipo (movies/tvshows)
-                    // Busca <span class="movies"> o <span class="tvshows">
-                    const typeMatch = content.match(/<span class="(movies|tvshows|series)"/);
+                    let title = fullTitle;
+                    let year = "0";
 
-                    if (urlMatch && imgMatch) {
-                        const url = urlMatch[1];
-                        const img = imgMatch[1];
-                        const rawTitle = imgMatch[2]; // Ej: "The Batman (2022)"
-                        
-                        let title = rawTitle;
-                        let year = "0";
-
-                        // Separar Año del Título: "Batman (2022)" -> Title: "Batman", Year: "2022"
-                        const yearExtract = rawTitle.match(/(.*)\s\((\d{4})\)$/);
-                        if (yearExtract) {
-                            title = yearExtract[1].trim();
-                            year = yearExtract[2];
-                        }
-
-                        // Determinar tipo
-                        let type = 'movie';
-                        if (typeMatch && (typeMatch[1] === 'tvshows' || typeMatch[1] === 'series')) {
-                            type = 'tv';
-                        } else if (url.includes('/tvshows/') || url.includes('/episodes/')) {
-                            type = 'tv';
-                        }
-
-                        results.push({
-                            title: title,
-                            url: url,
-                            img: img,
-                            id: url,
-                            type: type,
-                            year: year
-                        });
+                    // Extraer año de los paréntesis (2022)
+                    const yearMatch = fullTitle.match(/(.*)\s\((\d{4})\)$/);
+                    if (yearMatch) {
+                        title = yearMatch[1].trim();
+                        year = yearMatch[2];
                     }
-                }
 
+                    // Determinar tipo por la URL
+                    let type = 'movie';
+                    if (url.includes('/tvshows/') || url.includes('/series/') || url.includes('/episodes/')) {
+                        type = 'tv';
+                    }
+
+                    results.push({
+                        title: title,
+                        url: url,
+                        img: img,
+                        id: url,
+                        type: type,
+                        year: year
+                    });
+                }
+                
+                bridge.log("JS: ZonaAps encontró " + results.length + " resultados");
                 bridge.onResult(JSON.stringify(results));
             } catch (e) { bridge.onResult("[]"); }
         },
 
+        // ... (MANTÉN IGUAL LAS FUNCIONES resolveVideo Y resolveEpisode) ...
         resolveVideo: async function(url, type) {
             try {
-                bridge.log("JS: Extrayendo de: " + url);
+                bridge.log("JS: Extrayendo: " + url);
                 const html = await bridge.fetchHtml(url);
                 const servers = [];
-
-                // 1. EXTRAER IFRAMES (ZonaAps usa varios iframes directos)
-                const iframeRegex = /<iframe[^>]*src=["']([^"']+)["'][^>]*>/g;
-                let iframeMatch;
                 
-                while ((iframeMatch = iframeRegex.exec(html)) !== null) {
-                    let src = iframeMatch[1];
+                const iframeRegex = /<iframe[^>]*src=["']([^"']+)["'][^>]*>/g;
+                let m;
+                while ((m = iframeRegex.exec(html)) !== null) {
+                    let src = m[1];
+                    if(src.startsWith("//")) src = "https:"+src;
                     
-                    // Limpieza de URL
-                    if (src.startsWith("//")) src = "https:" + src;
+                    if(src.includes('facebook') || src.includes('twitter')) continue;
                     
-                    // Ignorar redes sociales
-                    if (src.includes('facebook') || src.includes('twitter')) continue;
-
                     let name = "Server";
-                    let requiresWeb = true; // Por seguridad, asumimos WebPlayer primero
+                    let requiresWeb = true;
+                    
+                    if(src.includes('zonaaps')) name = "ZonaPlayer";
+                    else if(src.includes('embed69')) { name="Embed69"; requiresWeb=false; }
+                    else if(src.includes('waaw')) name="Waaw";
+                    else if(src.includes('filemoon')) name="Filemoon";
+                    else if(src.includes('vidhide')) { name="Vidhide"; requiresWeb=false; }
+                    else if(src.includes('streamwish')) name="Streamwish";
+                    else if(src.includes('youtube')) name="Trailer";
 
-                    // Identificar servidor
-                    if (src.includes('zonaaps-player')) name = "ZonaPlayer";
-                    else if (src.includes('youtube')) name = "Trailer";
-                    else if (src.includes('embed69')) { name = "Embed69"; requiresWeb = false; } 
-                    else if (src.includes('waaw')) name = "Waaw";
-                    else if (src.includes('filemoon')) name = "Filemoon";
-                    else if (src.includes('streamwish')) name = "Streamwish";
-                    else if (src.includes('vidhide')) { name = "Vidhide"; requiresWeb = false; }
-
-                    if (name !== "Trailer") {
-                        servers.push({
-                            server: name,
-                            lang: "Latino", // Asumimos Latino por defecto
-                            url: src,
-                            requiresWebView: requiresWeb
-                        });
+                    if(name !== "Trailer") {
+                        servers.push({server: name, lang: "Latino", url: src, requiresWebView: requiresWeb});
                     }
                 }
-
                 bridge.onResult(JSON.stringify(servers));
-            } catch (e) { bridge.onResult("[]"); }
+            } catch(e) { bridge.onResult("[]"); }
         },
 
         resolveEpisode: async function(url, season, episode) {
-            // Lógica para Series en ZonaAps (Basada en tu archivo ZNA Series.txt)
             try {
                 bridge.log("JS: Resolviendo episodio: " + url);
-                
-                // Caso 1: Nos llega la URL de la Ficha de la Serie
                 if (url.includes('/tvshows/')) {
                     const html = await bridge.fetchHtml(url);
-                    
-                    // ZonaAps lista los episodios con enlaces directos
-                    // Buscamos algo que contenga "1x7" o "1x07"
-                    // Formato posible: <a href="..."> ... 1x7 ... </a>
-                    
-                    const epPad = episode < 10 ? "0" + episode : episode;
-                    // Regex busca "1x7" o "1x07" dentro del texto de un enlace
-                    const linkRegex = new RegExp(`<a[^>]+href=["']([^"']+)["'][^>]*>.*?(?:${season}x${episode}|${season}x${epPad}).*?<\/a>`, "i");
-                    
-                    const match = html.match(linkRegex);
-                    
-                    if (match) {
-                        const epUrl = match[1];
-                        bridge.log("JS: Link episodio encontrado: " + epUrl);
-                        await this.resolveVideo(epUrl, 'tv');
-                    } else {
-                        // Intento de adivinanza (Fallback)
-                        // De: https://zonaaps.com/tvshows/loki/ 
-                        // A:  https://zonaaps.com/episodes/loki-1x7/
-                        // Limpiamos la url base para sacar el "slug"
-                        const slug = url.split('/tvshows/')[1].replace('/', ''); 
-                        const guessUrl = `${this.baseUrl}/episodes/${slug}-${season}x${episode}/`;
-                        
-                        bridge.log("JS: Intentando URL directa: " + guessUrl);
-                        await this.resolveVideo(guessUrl, 'tv');
+                    // Buscar link tipo: .../episodes/titulo-1x7/
+                    const epRegex = new RegExp(`href="([^"]+\/episodes\/[^"]*?${season}x${episode}[^"]*)"`, "i");
+                    const match = html.match(epRegex);
+                    if(match) await this.resolveVideo(match[1], 'tv');
+                    else {
+                        // Fallback adivinanza
+                        const slug = url.split('/tvshows/')[1].replace('/','');
+                        await this.resolveVideo(`${this.baseUrl}/episodes/${slug}-${season}x${episode}/`, 'tv');
                     }
-                } 
-                // Caso 2: Ya es la URL del episodio
-                else {
+                } else {
                     await this.resolveVideo(url, 'tv');
                 }
             } catch (e) { bridge.onResult("[]"); }
