@@ -27,23 +27,29 @@ enum class ScreenState {
 }
 
 class MainActivity : ComponentActivity() {
-    @OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // 1. INICIALIZAR EL MOTOR
         ScriptEngine.initialize(this)
 
-        // 2. INSTANCIAR EL GESTOR DE PROVEEDORES (Aquí está el val que faltaba)
-        // Al hacer esto, se dispara el 'init' y carga 'sololatino.js' desde assets
+        // 2. INSTANCIAR EL GESTOR DE PROVEEDORES
+        // Esto carga primero el script 'sololatino.js' local (assets) como respaldo rápido
         val providerManager = ProviderManager(this)
-/*
+
+        // 3. ACTIVAR MODO NUBE (DESCOMENTADO) ☁️
+        // Esto descarga el manifest y actualiza los scripts desde GitHub en segundo plano
         lifecycleScope.launch {
-            val manifestUrl = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_scripts/manifest.json"
+            // Asegúrate que esta URL sea la RAW correcta de tu archivo manifest.json
+            val manifestUrl = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_script/manifest.json"
+            
+            Log.d("KRONOS", "🌍 Iniciando actualización remota...")
             ProviderManager.loadRemoteProviders(manifestUrl)
+            Log.d("KRONOS", "✅ Proceso de actualización remota finalizado.")
         }
-*/
-        // --- CRASH HANDLER ---
+
+        // --- CRASH HANDLER (Manejador de errores) ---
         Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
             Log.e("KronosCrash", "CRASH DETECTADO: ${throwable.message}", throwable)
             
@@ -58,12 +64,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             Surface(modifier = Modifier.fillMaxSize(), shape = RectangleShape) {
-                // Pasamos el providerManager a la navegación
+                // Pasamos el providerManager (que ya tiene lo local y lo remoto) a la navegación
                 AppNavigation(providerManager)
             }
         }
     }
-}
 
 @Composable
 fun AppNavigation(providerManager: ProviderManager) { // <--- Recibimos el Manager aquí
