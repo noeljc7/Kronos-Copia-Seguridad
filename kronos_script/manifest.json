@@ -1,7 +1,7 @@
 {
   "version": 1,
   "scripts": [
-    "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/kronos_script/providers/sololatino.js"
+    "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/kronos_script/sololatino.js"
   ],
   "providers": [
     {
