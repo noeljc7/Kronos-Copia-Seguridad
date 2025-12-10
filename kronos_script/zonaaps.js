@@ -5,8 +5,8 @@
         baseUrl: 'https://zonaaps.com',
         headers: {
             'User-Agent': 'Mozilla/5.0 (Linux; Android 10)',
-            'Referer': 'https://zonaaps.com/',
-            'X-Requested-With': 'XMLHttpRequest' // Necesario para la API
+            'X-Requested-With': 'XMLHttpRequest', 
+            'Referer': 'https://zonaaps.com/'
         },
 
         search: async function(query) {
@@ -31,7 +31,6 @@
                     const yearMatch = fullTitle.match(/(.*)\s\((\d{4})\)$/);
                     if (yearMatch) { title = yearMatch[1].trim(); year = yearMatch[2]; }
                     let type = (url.includes('/tvshows/') || url.includes('/episodes/')) ? 'tv' : 'movie';
-                    
                     results.push({ title: title, url: url, img: img, id: url, type: type, year: year });
                 }
                 bridge.onResult(JSON.stringify(results));
@@ -44,89 +43,64 @@
                 const html = await bridge.fetchHtml(url);
                 const servers = [];
 
-                // --- ESTRATEGIA FLEXIBLE (V7.0) ---
-                // 1. Encontrar todos los bloques <li> que sean opciones, sin importar atributos
-                const listItemsMatch = html.match(/<li[^>]*class=['"][^'"]*dooplay_player_option[^'"]*['"][^>]*>([\s\S]*?)<\/li>/g);
+                // 1. BUSCAR BOTONES DE LA API
+                const liRegex = /<li[^>]+data-post=['"](\d+)['"][^>]*data-type=['"]([^"']+)['"][^>]*data-nume=['"](\d+)['"][^>]*>([\s\S]*?)<\/li>/g;
+                let match;
+                const apiRequests = [];
 
-                if (listItemsMatch) {
-                    bridge.log("JS [ZNA]: Se encontraron " + listItemsMatch.length + " botones.");
-                    
-                    const apiRequests = [];
+                while ((match = liRegex.exec(html)) !== null) {
+                    const postId = match[1];
+                    const pType = match[2];
+                    const nume = match[3];
+                    const content = match[4];
 
-                    for (const itemHtml of listItemsMatch) {
-                        // 2. Extraer atributos INDIVIDUALMENTE (No importa el orden)
-                        const postMatch = itemHtml.match(/data-post=['"](\d+)['"]/);
-                        const typeMatch = itemHtml.match(/data-type=['"]([^"']+)['"]/);
-                        const numeMatch = itemHtml.match(/data-nume=['"](\d+|trailer)['"]/); // Acepta números o 'trailer'
+                    if (nume === "trailer") continue;
 
-                        if (postMatch && typeMatch && numeMatch) {
-                            const postId = postMatch[1];
-                            const pType = typeMatch[1];
-                            const nume = numeMatch[1];
+                    let serverName = "Opción " + nume;
+                    const titleMatch = content.match(/<span class=['"]title['"]>(.*?)<\/span>/);
+                    if (titleMatch) serverName = titleMatch[1].replace(/🔒/g, "").trim();
 
-                            if (nume === "trailer") continue;
+                    let lang = "Latino";
+                    if (content.toLowerCase().includes("sub")) lang = "Subtitulado";
+                    else if (content.toLowerCase().includes("castellano") || content.includes("es.png")) lang = "Castellano";
 
-                            // Nombre del servidor
-                            let serverName = "Opción " + nume;
-                            const titleMatch = itemHtml.match(/<span class=['"]title['"]>(.*?)<\/span>/);
-                            if (titleMatch) serverName = titleMatch[1].replace(/🔒/g, "").trim();
-
-                            // Idioma
-                            let lang = "Latino";
-                            if (itemHtml.toLowerCase().includes("sub")) lang = "Subtitulado";
-                            else if (itemHtml.toLowerCase().includes("castellano") || itemHtml.includes("es.png")) lang = "Castellano";
-
-                            bridge.log(`JS [ZNA]: Procesando ${serverName} (ID: ${postId})`);
-
-                            // 3. Llamada a la API
-                            const apiUrl = `${this.baseUrl}/wp-json/dooplayer/v2/${postId}/${pType}/${nume}`;
-                            apiRequests.push(this.fetchApiLink(apiUrl, serverName, lang));
-                        }
-                    }
-
-                    // Esperar todas las respuestas
-                    if (apiRequests.length > 0) {
-                        const resolved = await Promise.all(apiRequests);
-                        resolved.forEach(s => { if(s) servers.push(s); });
-                    }
-                } else {
-                    bridge.log("JS [ZNA]: No se encontraron botones <li> compatibles.");
+                    const apiUrl = `${this.baseUrl}/wp-json/dooplayer/v2/${postId}/${pType}/${nume}`;
+                    apiRequests.push(this.fetchApiLink(apiUrl, serverName, lang));
                 }
 
-                // ESTRATEGIA DE RESPALDO (WEB)
+                if (apiRequests.length > 0) {
+                    const resolved = await Promise.all(apiRequests);
+                    resolved.forEach(s => { if(s) servers.push(s); });
+                }
+
+                // 2. SI FALLA LA API, MODO WEB
                 if (servers.length === 0) {
-                    bridge.log("JS [ZNA]: Fallo API. Activando Modo Web.");
+                    bridge.log("JS [ZNA]: Fallo API. Usando respaldo Web.");
                     servers.push({
-                        server: "ZonaAps (Modo Web)",
+                        server: "ZonaAps (Ver en Web)",
                         lang: "Latino",
                         url: url,
-                        requiresWebView: true
+                        requiresWebView: true // Obliga a abrir navegador
                     });
                 }
 
                 bridge.onResult(JSON.stringify(servers));
 
-            } catch (e) { 
-                bridge.log("JS Error: " + e.message);
-                bridge.onResult("[]"); 
-            }
+            } catch (e) { bridge.onResult("[]"); }
         },
 
         fetchApiLink: async function(apiUrl, serverName, lang) {
             try {
-                // Tu JsBridge compilado con headers hará magia aquí
                 const jsonStr = await bridge.fetchHtml(apiUrl);
-                
                 if (!jsonStr || jsonStr.trim().startsWith("<")) return null;
 
                 const json = JSON.parse(jsonStr);
                 const targetUrl = json.embed_url || json.u;
 
                 if (targetUrl) {
-                    // Si el link es un MP4 real, es nativo. Si es un embed (ej: fembed), usa webview.
                     const isDirect = targetUrl.endsWith(".mp4") || targetUrl.endsWith(".m3u8");
                     return {
-                        server: serverName, // Ej: "Opción 1"
+                        server: serverName,
                         lang: lang,
                         url: targetUrl,
                         requiresWebView: !isDirect 
@@ -136,6 +110,7 @@
             return null;
         },
 
+        // ... (resolveEpisode igual que antes) ...
         resolveEpisode: async function(url, season, episode) {
             try {
                 if (url.includes('/tvshows/')) {
