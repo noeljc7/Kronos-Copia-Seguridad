@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 
+// Modelo de datos para el enlace
 data class SourceLink(
     val name: String,
     val url: String,
@@ -23,36 +24,31 @@ data class SourceLink(
 
 class ProviderManager(private val context: Context) {
 
-    // YA NO HAY PROVEEDORES LOCALES
-    // Todo vive en el Companion Object (Estático) cargado desde la nube
-
     companion object {
-        // Única fuente de verdad
+        // Única lista de proveedores (Solo Nube)
         val remoteProviders = mutableListOf<KronosProvider>()
-        private var isRemoteLoaded = false
+        var isRemoteLoaded = false
 
         suspend fun loadRemoteProviders(manifestUrl: String) = withContext(Dispatchers.IO) {
-            // Reiniciamos la lista cada vez que cargamos para evitar duplicados si se reintenta
             remoteProviders.clear()
             isRemoteLoaded = false
             
             try {
-                ScreenLogger.log("KRONOS", "☁️ Conectando a la Nave Nodriza...")
-                ScreenLogger.log("KRONOS", "URL: $manifestUrl")
-
+                ScreenLogger.log("KRONOS", "☁️ Actualizando desde la nube...")
+                
                 val jsonStr = URL(manifestUrl).readText()
                 val json = JSONObject(jsonStr)
 
-                // 1. Cargar Scripts JS (El cerebro)
+                // 1. Cargar lógica (Scripts)
                 if (json.has("scripts")) {
                     val scripts = json.getJSONArray("scripts")
+                    ScreenLogger.log("KRONOS", "📜 Descargando ${scripts.length()} scripts...")
                     for (i in 0 until scripts.length()) {
-                        val scriptUrl = scripts.getString(i)
-                        ScriptEngine.loadScriptFromUrl(scriptUrl)
+                        ScriptEngine.loadScriptFromUrl(scripts.getString(i))
                     }
                 }
 
-                // 2. Registrar Proveedores (Los obreros)
+                // 2. Registrar obreros (Providers)
                 if (json.has("providers")) {
                     val remoteList = json.getJSONArray("providers")
                     for (i in 0 until remoteList.length()) {
@@ -60,27 +56,28 @@ class ProviderManager(private val context: Context) {
                         val id = p.getString("id")
                         val name = p.getString("name")
                         
-                        remoteProviders.add(JsContentProvider(id, name))
-                        ScreenLogger.log("KRONOS", "✅ Proveedor Activado: $name")
+                        // Evitar duplicados por si acaso
+                        if (remoteProviders.none { it.name == id }) {
+                            remoteProviders.add(JsContentProvider(id, name))
+                            ScreenLogger.log("KRONOS", "✅ Fuente lista: $name")
+                        }
                     }
                 }
-                
+
                 if (remoteProviders.isEmpty()) {
-                    ScreenLogger.log("ALERTA", "⚠️ El manifiesto no contiene proveedores. La app está vacía.")
+                    ScreenLogger.log("ALERTA", "⚠️ Manifiesto cargado pero sin proveedores.")
                 } else {
                     isRemoteLoaded = true
-                    ScreenLogger.log("KRONOS", "🎉 Sistema Remoto Cargado: ${remoteProviders.size} fuentes.")
+                    ScreenLogger.log("KRONOS", "🎉 SISTEMA LISTO: ${remoteProviders.size} fuentes activas.")
                 }
 
             } catch (e: Exception) {
-                ScreenLogger.log("ERROR", "❌ ERROR FATAL DE CONEXIÓN: ${e.message}")
-                ScreenLogger.log("INFO", "La app no funcionará sin acceso al manifiesto.")
+                ScreenLogger.log("ERROR", "❌ Error de conexión al Manifiesto: ${e.message}")
             }
         }
     }
 
-    // Ya no hay init {} ni carga local
-
+    // Búsqueda Optimizada (Paralela)
     suspend fun getLinks(
         tmdbId: Int, 
         title: String, 
@@ -91,15 +88,14 @@ class ProviderManager(private val context: Context) {
         episode: Int = 0
     ): List<SourceLink> = coroutineScope {
         
-        // Si no hay proveedores remotos, retornamos vacío inmediatamente
         if (remoteProviders.isEmpty()) {
-            ScreenLogger.log("KRONOS", "⛔ Solicitud rechazada: No hay proveedores cargados.")
+            ScreenLogger.log("KRONOS", "⛔ Error: No hay proveedores cargados.")
             return@coroutineScope emptyList()
         }
 
-        ScreenLogger.log("KRONOS", "⚡ Buscando en la nube (${remoteProviders.size} fuentes)...")
+        ScreenLogger.log("KRONOS", "⚡ Buscando simultáneamente en ${remoteProviders.size} fuentes...")
         
-        // Búsqueda Paralela (Optimizada)
+        // Lanzamos todos los hilos a la vez
         val deferredResults = remoteProviders.map { provider ->
             async(Dispatchers.IO) {
                 try {
@@ -109,13 +105,16 @@ class ProviderManager(private val context: Context) {
                         provider.getEpisodeLinks(tmdbId, title, season, episode)
                     }
                 } catch (e: Exception) {
-                    ScreenLogger.log("ERROR", "❌ ${provider.name}: ${e.message}")
+                    ScreenLogger.log("ERROR", "❌ Fallo en ${provider.name}: ${e.message}")
                     emptyList<SourceLink>()
                 }
             }
         }
 
+        // Esperamos al más lento y unimos resultados
         val results = deferredResults.awaitAll().flatten()
+        
+        // Ordenamos: 1080p primero, luego 720p, etc.
         return@coroutineScope results.sortedByDescending { it.quality }
     }
 }
