@@ -1,109 +1,162 @@
 import json
 import cloudscraper
 import re
-from bs4 import BeautifulSoup
+from java import jclass # Importamos interfaz Java
 
-# Instancia global del scraper (mantiene cookies y sesión activa)
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
+# --- CONFIGURACIÓN DE LOGS ANDROID ---
+Log = jclass("android.util.Log")
+TAG = "KRONOS_PY"
+
+def log(msg):
+    Log.d(TAG, str(msg))
+
+def error(msg):
+    Log.e(TAG, str(msg))
+
+# --- INICIALIZACIÓN ---
+try:
+    log("Iniciando Cloudscraper...")
+    # Configuramos un navegador Chrome de PC para engañar a Cloudflare
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
+    log("Cloudscraper listo.")
+except Exception as e:
+    error(f"Error fatal iniciando Cloudscraper: {e}")
 
 BASE_URL = "https://sololatino.net"
 
-def log(msg):
-    print(f"[PYTHON] {msg}")
-
 def search(query):
     try:
-        log(f"Buscando: {query}")
+        log(f"--- SEARCH INICIO: {query} ---")
         
-        # 1. Obtener Nonce de la home (Cloudscraper maneja el acceso)
-        home = scraper.get(BASE_URL).text
-        nonce_match = re.search(r'"nonce":"([^"]+)"', home)
+        # 1. Obtener HTML de la Home (Para robar el Nonce)
+        log(f"Descargando Home: {BASE_URL}")
+        response = scraper.get(BASE_URL)
         
-        if not nonce_match:
-            log("No se encontró nonce")
+        if response.status_code != 200:
+            error(f"Error HTTP en Home: {response.status_code}")
             return "[]"
             
-        nonce = nonce_match.group(1)
+        home_html = response.text
+        # log(f"HTML Home longitud: {len(home_html)}") # Descomentar si sospechas que llega vacío
+
+        # 2. Buscar Nonce con Regex Flexible
+        # Busca: "nonce":"xyz"  o  'nonce':'xyz'
+        match = re.search(r'["\']nonce["\']\s*:\s*["\']([^"\']+)["\']', home_html)
         
-        # 2. Consultar API Dooplay
-        url = f"{BASE_URL}/wp-json/dooplay/search/?keyword={query}&nonce={nonce}"
-        resp = scraper.get(url).json()
+        if not match:
+            error("❌ NO SE ENCONTRÓ EL NONCE. Posible cambio de seguridad.")
+            return "[]"
+            
+        nonce = match.group(1)
+        log(f"🔑 Nonce encontrado: {nonce}")
+        
+        # 3. Consultar API Dooplay
+        # Usamos requests params para que codifique bien los espacios (%20)
+        api_url = f"{BASE_URL}/wp-json/dooplay/search/"
+        params = {'keyword': query, 'nonce': nonce}
+        
+        log(f"Consultando API: {api_url} | params: {params}")
+        
+        api_resp = scraper.get(api_url, params=params)
+        log(f"Respuesta API Code: {api_resp.status_code}")
+        
+        resp_json = api_resp.json()
         
         results = []
-        # Normalizar respuesta (puede ser dict o list)
-        items = resp.values() if isinstance(resp, dict) else resp
+        # Normalizar respuesta (Dooplay devuelve diccionario o lista)
+        items = resp_json.values() if isinstance(resp_json, dict) else resp_json
         
         for item in items:
-            if 'url' in item and 'title' in item:
+            # Validamos que tenga lo mínimo necesario
+            if isinstance(item, dict) and 'url' in item and 'title' in item:
                 tipo = 'tv' if '/series/' in item['url'] or '/tvshows/' in item['url'] else 'movie'
-                year = item.get('extra', {}).get('date', '0')
+                
+                # Extraer año de forma segura
+                year = "0"
+                if 'extra' in item and isinstance(item['extra'], dict):
+                    year = item['extra'].get('date', '0')
                 
                 results.append({
                     "title": item['title'],
                     "url": item['url'],
                     "img": item.get('img', ''),
-                    "year": year,
+                    "year": str(year),
                     "type": tipo
                 })
-                
+        
+        log(f"✅ Resultados parseados: {len(results)}")
         return json.dumps(results)
+
     except Exception as e:
-        log(f"Error search: {str(e)}")
+        error(f"🔥 EXCEPCIÓN EN SEARCH: {str(e)}")
+        import traceback
+        error(traceback.format_exc())
         return "[]"
 
 def get_links(url):
     try:
-        log(f"Analizando: {url}")
-        html = scraper.get(url).text
-        soup = BeautifulSoup(html, 'html.parser')
+        log(f"--- GET LINKS INICIO: {url} ---")
         
+        response = scraper.get(url)
+        if response.status_code != 200:
+            error(f"Error HTTP {response.status_code} en URL")
+            return "[]"
+            
+        html = response.text
         final_links = []
         
-        # BUSCAR IFRAMES DIRECTOS (Peliculas)
-        iframes = soup.find_all('iframe', class_='metaframe')
-        for iframe in iframes:
-            src = iframe.get('src')
+        # A. BUSCAR IFRAMES DIRECTOS (Embed69/XuPalace)
+        # Regex busca src="..." que contenga embed69 o xupalace
+        log("Buscando iframes directos...")
+        iframes = re.findall(r'<iframe[^>]*src=["\']([^"\']+)["\']', html)
+        
+        for src in iframes:
             if "embed69" in src or "xupalace" in src:
-                extracted = extract_embed69(src)
+                log(f"Iframe encontrado: {src}")
+                extracted = extract_embed(src)
                 final_links.extend(extracted)
 
-        # BUSCAR OPCIONES DE SERIES (API AJAX)
-        # En Python BeautifulSoup hace esto facilísimo
-        lis = soup.find_all('li', {'data-post': True, 'data-nume': True})
+        # B. BUSCAR BOTONES DE SERIE (API AJAX)
+        log("Buscando botones de serie (AJAX)...")
+        lis = re.findall(r'<li[^>]+data-post=[\'"](\d+)[\'"][^>]*data-type=[\'"]([^"\']+)[\'"][^>]*data-nume=[\'"](\d+)[\'"]', html)
         
-        for li in lis:
-            post_id = li['data-post']
-            tipo = li['data-type']
-            nume = li['data-nume']
+        log(f"Botones encontrados: {len(lis)}")
+        
+        for post_id, tipo, nume in lis:
+            if str(nume) == "trailer": continue
             
-            if nume == "trailer": continue
-            
-            # Llamada a API interna para sacar el iframe
             api_url = f"{BASE_URL}/wp-json/dooplay/v2/{post_id}/{tipo}/{nume}"
-            api_resp = scraper.get(api_url).json()
+            # log(f"Consultando opción: {api_url}")
             
-            target_url = api_resp.get('embed_url') or api_resp.get('u')
-            if target_url:
-                if "embed69" in target_url or "xupalace" in target_url:
-                    extracted = extract_embed69(target_url)
+            try:
+                # Simulamos ser navegador pidiendo JSON
+                headers = {"X-Requested-With": "XMLHttpRequest"}
+                api_data = scraper.get(api_url, headers=headers).json()
+                
+                target_url = api_data.get('embed_url') or api_data.get('u')
+                
+                if target_url and ("embed69" in target_url or "xupalace" in target_url):
+                    # log(f"Target revelado: {target_url}")
+                    extracted = extract_embed(target_url)
                     final_links.extend(extracted)
+            except:
+                pass # Ignorar fallos puntuales en botones
 
+        log(f"✅ Total enlaces extraídos: {len(final_links)}")
         return json.dumps(final_links)
         
     except Exception as e:
-        log(f"Error get_links: {str(e)}")
+        error(f"🔥 EXCEPCIÓN EN GET_LINKS: {str(e)}")
         return "[]"
 
-def extract_embed69(url):
+def extract_embed(url):
     try:
-        log(f"Destripando Embed: {url}")
-        
         # Extraer ID
         match = re.search(r'/(?:f|video)/([a-zA-Z0-9-]+)', url)
         if not match: return []
@@ -112,7 +165,7 @@ def extract_embed69(url):
         domain = "https://xupalace.org" if "xupalace" in url else "https://embed69.org"
         decrypt_url = f"{domain}/api/decrypt"
         
-        # Petición POST directa (Cloudscraper se encarga de headers/cookies)
+        # Petición POST
         headers = {
             "Referer": url,
             "X-Requested-With": "XMLHttpRequest"
@@ -121,16 +174,27 @@ def extract_embed69(url):
         resp = scraper.post(decrypt_url, data={'id': video_id}, headers=headers).json()
         
         extracted = []
-        if resp.get('success'):
-            for link in resp.get('links', []):
+        if resp.get('success') and resp.get('links'):
+            for link in resp['links']:
+                final_url = link['link'].replace('\\', '')
+                
+                # Detectar nombre del servidor
+                host = "Server"
+                if "voe" in final_url: host = "Voe"
+                elif "dood" in final_url or "dintezuvio" in final_url: host = "Doodstream"
+                elif "filemoon" in final_url: host = "Filemoon"
+                elif "streamwish" in final_url: host = "Streamwish"
+                elif "vidhide" in final_url: host = "Vidhide"
+                
                 extracted.append({
-                    "server": link['link'].split('/')[2], # Nombre del dominio como nombre server
-                    "url": link['link'],
+                    "server": host,
+                    "url": final_url,
                     "quality": "HD",
-                    "lang": "Multi"
+                    "lang": "Multi",
+                    "provider": "Python"
                 })
                 
         return extracted
     except Exception as e:
-        log(f"Error decrypt: {str(e)}")
+        error(f"Error Decrypt: {str(e)}")
         return []
