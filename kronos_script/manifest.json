@@ -1,17 +1,12 @@
 {
   "version": 1,
   "scripts": [
-    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_script/sololatino.js",
-    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_script/zonaaps.js"
+    "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_script/sololatino.js"
   ],
   "providers": [
     {
       "id": "sololatino",
       "name": "SoloLatino (Nube)"
-    },
-    {
-      "id": "zonaaps",
-      "name": "ZonaAps"
     }
   ]
 }
