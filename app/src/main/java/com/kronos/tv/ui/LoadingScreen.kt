@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 
+@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun LoadingScreen(status: String) {
     Box(
