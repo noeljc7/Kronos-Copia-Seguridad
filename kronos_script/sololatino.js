@@ -1,58 +1,112 @@
 (function() {
     const provider = {
-        id: 'zonaaps',
-        name: 'ZonaAps',
-        baseUrl: 'https://zonaaps.com',
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10)',
-            'X-Requested-With': 'XMLHttpRequest', 
-            'Referer': 'https://zonaaps.com/'
-        },
+        id: 'sololatino',
+        name: 'SoloLatino',
+        baseUrl: 'https://sololatino.net',
+        headers: {'User-Agent': 'Mozilla/5.0 (Linux; Android 10)'},
 
         search: async function(query) {
             try {
-                const cleanQuery = encodeURIComponent(query.replace(/[:\-\.]/g, ' '));
+                // CAMBIO SOLICITADO: No limpiamos caracteres. Solo codificamos URL.
+                // Esto permite buscar "Spider-Man" o "Avengers: Endgame" tal cual.
+                const cleanQuery = encodeURIComponent(query.trim());
                 const searchUrl = this.baseUrl + "/?s=" + cleanQuery;
-                bridge.log("JS [ZNA]: Buscando: " + searchUrl);
-
-                let html = await bridge.fetchHtml(searchUrl);
+                
+                bridge.log("JS: Buscando Exacto: " + searchUrl);
+                
+                let html = "";
+                try { html = await bridge.fetchHtml(searchUrl); } catch (e) { return []; }
+                
                 if (!html || html.length < 100) return [];
-
+                
                 const results = [];
-                const regex = /<div class="result-item">[\s\S]*?<a href="([^"]+)"[\s\S]*?<img src="([^"]+)"[^>]*?alt="([^"]+)"/g;
+                const articleRegex = /<article[^>]*class="item\s+(movies|tvshows)"[^>]*>([\s\S]*?)<\/article>/g;
                 
                 let match;
-                while ((match = regex.exec(html)) !== null) {
-                    const url = match[1];
-                    const img = match[2];
-                    const fullTitle = match[3];
-                    let title = fullTitle;
+                while ((match = articleRegex.exec(html)) !== null) {
+                    const content = match[2];
+                    const urlMatch = content.match(/href="([^"]+)"/);
+                    const imgMatch = content.match(/src="([^"]+)"/) || content.match(/data-src="([^"]+)"/) || content.match(/data-srcset="([^"\s]+)/);
+                    const titleMatch = content.match(/<h3>([^<]+)<\/h3>/);
+                    
                     let year = "0";
-                    const yearMatch = fullTitle.match(/(.*)\s\((\d{4})\)$/);
-                    if (yearMatch) { title = yearMatch[1].trim(); year = yearMatch[2]; }
-                    let type = (url.includes('/tvshows/') || url.includes('/episodes/')) ? 'tv' : 'movie';
-                    results.push({ title: title, url: url, img: img, id: url, type: type, year: year });
+                    const yearMatch = content.match(/(\d{4})/);
+                    if (yearMatch) year = yearMatch[1];
+                    
+                    if (urlMatch && titleMatch) {
+                        results.push({
+                            title: titleMatch[1].trim(), // El título original suele venir en el HTML
+                            url: urlMatch[1],
+                            img: imgMatch ? imgMatch[1] : "",
+                            id: urlMatch[1],
+                            type: match[1] === 'tvshows' ? 'tv' : 'movie',
+                            year: year
+                        });
+                    }
                 }
-                bridge.onResult(JSON.stringify(results));
-            } catch (e) { bridge.onResult("[]"); }
+                
+                // Fallback de redirección (Si hay coincidencia exacta)
+                if (results.length === 0) {
+                    const canonical = html.match(/<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']/i);
+                    const ogTitle = html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i);
+                    
+                    if (canonical && ogTitle) {
+                        const directUrl = canonical[1];
+                        if (directUrl.includes('/peliculas/') || directUrl.includes('/series/')) {
+                            let rawTitle = ogTitle[1].replace(/^Ver\s+/i, '').replace(/\s+Online.*$/i, '').trim();
+                            results.push({ 
+                                title: rawTitle, 
+                                url: directUrl, 
+                                img: "", 
+                                id: directUrl, 
+                                type: directUrl.includes('/series/') ? 'tv' : 'movie', 
+                                year: "0" 
+                            });
+                        }
+                    }
+                }
+                
+                return results;
+
+            } catch (e) { 
+                bridge.log("JS ERROR: " + e.message);
+                return []; 
+            }
+        },
+
+        resolveEpisode: async function(showUrl, season, episode) {
+            try {
+                bridge.log("JS: Buscando ep " + season + "x" + episode);
+                const html = await bridge.fetchHtml(showUrl);
+                const epPad = episode < 10 ? "0" + episode : episode;
+                
+                // Regex para capturar enlaces de episodios
+                const regex = new RegExp(`href=["']([^"']*?(?:${season}x${episode}|${season}x${epPad})[^"']*)["']`, "i");
+                const match = html.match(regex);
+                
+                if (match) {
+                    return await this.resolveVideo(match[1], "tv");
+                } 
+                return [];
+            } catch (e) { return []; }
         },
 
         resolveVideo: async function(url, type) {
             try {
-                bridge.log("JS [ZNA]: Analizando API: " + url);
+                bridge.log("JS: Extrayendo servidores (API v2)...");
                 const html = await bridge.fetchHtml(url);
                 const servers = [];
+                const tasks = [];
 
-                // 1. BUSCAR BOTONES DE LA API
-                const liRegex = /<li[^>]+data-post=['"](\d+)['"][^>]*data-type=['"]([^"']+)['"][^>]*data-nume=['"](\d+)['"][^>]*>([\s\S]*?)<\/li>/g;
-                let match;
-                const apiRequests = [];
-
-                while ((match = liRegex.exec(html)) !== null) {
-                    const postId = match[1];
-                    const pType = match[2];
-                    const nume = match[3];
-                    const content = match[4];
+                // 1. ESTRATEGIA API (Dooplay v2) - La más efectiva para sacar TODOS los servidores
+                const apiLiRegex = /<li[^>]+data-post=['"](\d+)['"][^>]*data-type=['"]([^"']+)['"][^>]*data-nume=['"](\d+)['"][^>]*>([\s\S]*?)<\/li>/g;
+                let apiMatch;
+                
+                while ((apiMatch = apiLiRegex.exec(html)) !== null) {
+                    const postId = apiMatch[1];
+                    const pType = apiMatch[2];
+                    const nume = apiMatch[3];
+                    const content = apiMatch[4];
 
                     if (nume === "trailer") continue;
 
@@ -65,35 +119,44 @@
                     else if (content.toLowerCase().includes("castellano") || content.includes("es.png")) lang = "Castellano";
 
                     const apiUrl = `${this.baseUrl}/wp-json/dooplayer/v2/${postId}/${pType}/${nume}`;
-                    apiRequests.push(this.fetchApiLink(apiUrl, serverName, lang));
+                    tasks.push(this.fetchApiLink(apiUrl, serverName, lang));
                 }
 
-                if (apiRequests.length > 0) {
-                    const resolved = await Promise.all(apiRequests);
-                    resolved.forEach(s => { if(s) servers.push(s); });
+                // 2. ESTRATEGIA HTML (Respaldo)
+                const staticLiRegex = /<li[^>]*onclick=["']go_to_player\(['"]([^'"]+)['"]\)/g;
+                let staticMatch;
+                while ((staticMatch = staticLiRegex.exec(html)) !== null) {
+                    let rawUrl = staticMatch[1];
+                    if (rawUrl.includes("link=")) {
+                        try { rawUrl = atob(rawUrl.split("link=")[1]); } catch(e){}
+                    }
+                    
+                    // Solo agregamos si no viene duplicado de la API
+                    if (!tasks.some(t => JSON.stringify(t).includes(rawUrl))) {
+                         servers.push({
+                            server: "Web Player",
+                            lang: "Latino",
+                            url: rawUrl,
+                            quality: "HD",
+                            requiresWebView: true
+                        });
+                    }
                 }
 
-                // 2. SI FALLA LA API, MODO WEB
-                if (servers.length === 0) {
-                    bridge.log("JS [ZNA]: Fallo API. Usando respaldo Web.");
-                    servers.push({
-                        server: "ZonaAps (Ver en Web)",
-                        lang: "Latino",
-                        url: url,
-                        requiresWebView: true // Obliga a abrir navegador
-                    });
+                if (tasks.length > 0) {
+                    const apiResults = await Promise.all(tasks);
+                    apiResults.forEach(res => { if (res) servers.push(res); });
                 }
 
-                bridge.onResult(JSON.stringify(servers));
+                return servers;
 
-            } catch (e) { bridge.onResult("[]"); }
+            } catch (e) { return []; }
         },
 
         fetchApiLink: async function(apiUrl, serverName, lang) {
             try {
                 const jsonStr = await bridge.fetchHtml(apiUrl);
                 if (!jsonStr || jsonStr.trim().startsWith("<")) return null;
-
                 const json = JSON.parse(jsonStr);
                 const targetUrl = json.embed_url || json.u;
 
@@ -103,30 +166,13 @@
                         server: serverName,
                         lang: lang,
                         url: targetUrl,
-                        requiresWebView: !isDirect 
+                        quality: "HD",
+                        requiresWebView: !isDirect,
+                        isDirect: isDirect
                     };
                 }
-            } catch (e) { }
+            } catch (e) {}
             return null;
-        },
-
-        // ... (resolveEpisode igual que antes) ...
-        resolveEpisode: async function(url, season, episode) {
-            try {
-                if (url.includes('/tvshows/')) {
-                    const html = await bridge.fetchHtml(url);
-                    const epPad = episode < 10 ? "0" + episode : episode;
-                    const epRegex = new RegExp(`href="([^"]*?(?:${season}x${episode}|${season}x${epPad})[^"]*)"`, "i");
-                    const match = html.match(epRegex);
-                    if (match) await this.resolveVideo(match[1], 'tv');
-                    else {
-                        const slug = url.split('/tvshows/')[1].replace('/','');
-                        await this.resolveVideo(`${this.baseUrl}/episodes/${slug}-${season}x${episode}/`, 'tv');
-                    }
-                } else {
-                    await this.resolveVideo(url, 'tv');
-                }
-            } catch (e) { bridge.onResult("[]"); }
         }
     };
 
