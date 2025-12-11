@@ -1,3 +1,5 @@
+@file:OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class)
+
 package com.kronos.tv
 
 // --- IMPORTS ---
@@ -42,7 +44,6 @@ import com.kronos.tv.ui.AppNavigation
 import com.kronos.tv.ui.LoadingScreen // <--- IMPORTANTE: El archivo nuevo
 import com.kronos.tv.ui.CrashActivity
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
