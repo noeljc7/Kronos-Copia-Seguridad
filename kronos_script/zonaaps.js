@@ -26,27 +26,44 @@
                     const url = match[1];
                     const img = match[2];
                     const fullTitle = match[3];
+                    
                     let title = fullTitle;
                     let year = "0";
                     const yearMatch = fullTitle.match(/(.*)\s\((\d{4})\)$/);
-                    if (yearMatch) { title = yearMatch[1].trim(); year = yearMatch[2]; }
+                    if (yearMatch) { 
+                        title = yearMatch[1].trim(); 
+                        year = yearMatch[2]; 
+                    }
+                    
                     let type = (url.includes('/tvshows/') || url.includes('/episodes/')) ? 'tv' : 'movie';
-                    results.push({ title: title, url: url, img: img, id: url, type: type, year: year });
+                    
+                    results.push({ 
+                        title: title, 
+                        url: url, 
+                        img: img, 
+                        id: url, 
+                        type: type, 
+                        year: year 
+                    });
                 }
-                bridge.onResult(JSON.stringify(results));
-            } catch (e) { bridge.onResult("[]"); }
+                
+                // RETORNAR ARRAY
+                return results;
+
+            } catch (e) { return []; }
         },
 
         resolveVideo: async function(url, type) {
             try {
-                bridge.log("JS [ZNA]: Analizando API: " + url);
+                bridge.log("JS [ZNA]: Resolviendo: " + url);
                 const html = await bridge.fetchHtml(url);
                 const servers = [];
 
-                // 1. BUSCAR BOTONES DE LA API
+                // 1. Extraer IDs de Dooplay (API)
+                // Buscamos <li data-post="123" data-nume="1" ...>
                 const liRegex = /<li[^>]+data-post=['"](\d+)['"][^>]*data-type=['"]([^"']+)['"][^>]*data-nume=['"](\d+)['"][^>]*>([\s\S]*?)<\/li>/g;
                 let match;
-                const apiRequests = [];
+                const tasks = [];
 
                 while ((match = liRegex.exec(html)) !== null) {
                     const postId = match[1];
@@ -62,33 +79,41 @@
 
                     let lang = "Latino";
                     if (content.toLowerCase().includes("sub")) lang = "Subtitulado";
-                    else if (content.toLowerCase().includes("castellano") || content.includes("es.png")) lang = "Castellano";
+                    else if (content.toLowerCase().includes("castellano")) lang = "Castellano";
 
+                    // URL API
                     const apiUrl = `${this.baseUrl}/wp-json/dooplayer/v2/${postId}/${pType}/${nume}`;
-                    apiRequests.push(this.fetchApiLink(apiUrl, serverName, lang));
+                    
+                    // Añadimos la promesa al array de tareas
+                    tasks.push(this.fetchApiLink(apiUrl, serverName, lang));
                 }
 
-                if (apiRequests.length > 0) {
-                    const resolved = await Promise.all(apiRequests);
-                    resolved.forEach(s => { if(s) servers.push(s); });
-                }
-
-                // 2. SI FALLA LA API, MODO WEB
-                if (servers.length === 0) {
-                    bridge.log("JS [ZNA]: Fallo API. Usando respaldo Web.");
-                    servers.push({
-                        server: "ZonaAps (Ver en Web)",
-                        lang: "Latino",
-                        url: url,
-                        requiresWebView: true // Obliga a abrir navegador
+                if (tasks.length > 0) {
+                    // Esperamos todas las peticiones a la vez (Paralelismo dentro de JS)
+                    const resolved = await Promise.all(tasks);
+                    resolved.forEach(s => { 
+                        if(s) servers.push(s); 
                     });
                 }
 
-                bridge.onResult(JSON.stringify(servers));
+                // 2. Respaldo Web si falla API
+                if (servers.length === 0) {
+                    servers.push({
+                        server: "Ver en Web",
+                        lang: "Latino",
+                        url: url,
+                        quality: "HD",
+                        requiresWebView: true
+                    });
+                }
 
-            } catch (e) { bridge.onResult("[]"); }
+                // RETORNAR ARRAY
+                return servers;
+
+            } catch (e) { return []; }
         },
 
+        // Helper interno (no es necesario exportarlo)
         fetchApiLink: async function(apiUrl, serverName, lang) {
             try {
                 const jsonStr = await bridge.fetchHtml(apiUrl);
@@ -103,30 +128,34 @@
                         server: serverName,
                         lang: lang,
                         url: targetUrl,
-                        requiresWebView: !isDirect 
+                        quality: "HD",
+                        requiresWebView: !isDirect,
+                        isDirect: isDirect
                     };
                 }
-            } catch (e) { }
+            } catch (e) {}
             return null;
         },
 
-        // ... (resolveEpisode igual que antes) ...
         resolveEpisode: async function(url, season, episode) {
+            // ZonaAps suele listar episodios abajo o tener URLs predecibles
             try {
+                // Si es URL de serie (no episodio), intentamos buscar el episodio
                 if (url.includes('/tvshows/')) {
                     const html = await bridge.fetchHtml(url);
+                    // Regex flexible para encontrar el link del episodio
                     const epPad = episode < 10 ? "0" + episode : episode;
-                    const epRegex = new RegExp(`href="([^"]*?(?:${season}x${episode}|${season}x${epPad})[^"]*)"`, "i");
-                    const match = html.match(epRegex);
-                    if (match) await this.resolveVideo(match[1], 'tv');
-                    else {
-                        const slug = url.split('/tvshows/')[1].replace('/','');
-                        await this.resolveVideo(`${this.baseUrl}/episodes/${slug}-${season}x${episode}/`, 'tv');
+                    // Buscamos algo como "1x1" o "1x01" en los hrefs
+                    const regex = new RegExp(`href=["']([^"']*?(?:${season}x${episode}|${season}x${epPad})[^"']*)["']`, "i");
+                    const match = html.match(regex);
+                    
+                    if (match) {
+                        return await this.resolveVideo(match[1], 'tv');
                     }
-                } else {
-                    await this.resolveVideo(url, 'tv');
-                }
-            } catch (e) { bridge.onResult("[]"); }
+                } 
+                // Si ya es URL de episodio o fallback
+                return await this.resolveVideo(url, 'tv');
+            } catch (e) { return []; }
         }
     };
 
