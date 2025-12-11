@@ -1,186 +1,177 @@
 package com.kronos.tv.engine
 
-import android.webkit.JavascriptInterface
+import android.util.Base64
 import com.kronos.tv.ScreenLogger
-
-import okhttp3.Cookie
-import okhttp3.CookieJar
-import okhttp3.HttpUrl
-import okhttp3.MediaType.Companion.toMediaType
+import com.kronos.tv.providers.SourceLink
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.ConcurrentHashMap
+import java.util.Locale
+import java.util.regex.Pattern
 import java.util.concurrent.TimeUnit
 
-class JsBridge {
+object NativeExtractor {
 
-    // --- 1. GESTIÓN DE MEMORIA Y SESIÓN ---
-    
-    // Mapa para guardar cookies en memoria RAM (Vital para SoloLatino/Cloudflare)
-    private val memoryCookieJar = object : CookieJar {
-        private val cookieStore = ConcurrentHashMap<String, List<Cookie>>()
-
-        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-            // Guardamos las cookies nuevas combinándolas con las viejas
-            val existingCookies = cookieStore[url.host]?.toMutableList() ?: mutableListOf()
-            cookies.forEach { newCookie ->
-                existingCookies.removeIf { it.name == newCookie.name }
-                existingCookies.add(newCookie)
-            }
-            cookieStore[url.host] = existingCookies
-        }
-
-        override fun loadForRequest(url: HttpUrl): List<Cookie> {
-            // Entregamos las cookies guardadas para este dominio
-            return cookieStore[url.host] ?: emptyList()
-        }
-    }
-
-    // --- 2. EL MOTOR DE RED (Navegador Simulado) ---
-    
     private val client = OkHttpClient.Builder()
-        .cookieJar(memoryCookieJar) // Activamos la memoria de cookies
-        .connectTimeout(30, TimeUnit.SECONDS) // Tiempo de espera generoso
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
-        .followSslRedirects(true)
-        // Ignorar errores SSL (Certificados inválidos en webs de streaming)
-        .hostnameVerifier { _, _ -> true }
         .build()
 
-    // LA MÁSCARA: Estos headers hacen creer al servidor que somos Chrome en Windows
     private val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
-    // --- 3. INTERFACES PARA JAVASCRIPT ---
-
-    @JavascriptInterface
-    fun log(message: String) {
-        ScreenLogger.log("JS_LOG", message)
-    }
-
-    /**
-     * Función principal para navegar.
-     * El JS la usa para bajar el HTML de SoloLatino o ZonaAps.
-     */
-    @JavascriptInterface
-    fun fetchHtml(url: String): String {
-        return try {
-            ScreenLogger.log("HTTP", "🚀 GET: $url")
-
-            val requestBuilder = Request.Builder()
-                .url(url)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-                .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
-                .header("Upgrade-Insecure-Requests", "1")
-                .header("Sec-Ch-Ua", "\"Google Chrome\";v=\"123\", \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"123\"")
-                .header("Sec-Ch-Ua-Mobile", "?0")
-                .header("Sec-Ch-Ua-Platform", "\"Windows\"")
-                .header("Sec-Fetch-Dest", "document")
-                .header("Sec-Fetch-Mode", "navigate")
-                .header("Sec-Fetch-Site", "none")
-                .header("Sec-Fetch-User", "?1")
-
-            // Truco: Si vamos a SoloLatino, decimos que venimos de Google para ganar confianza
-            if (url.contains("sololatino")) {
-                requestBuilder.header("Referer", "https://www.google.com/")
-            }
-
-            val request = requestBuilder.build()
-
-            client.newCall(request).execute().use { response ->
-                // Si nos bloquean (403), devolvemos vacío para no romper la app
-                if (!response.isSuccessful && response.code == 403) {
-                    ScreenLogger.log("HTTP_WARN", "⚠️ Bloqueo 403 en $url (Intentando continuar...)")
-                    return@use ""
-                }
-                return@use response.body?.string() ?: ""
-            }
-        } catch (e: Exception) {
-            ScreenLogger.log("HTTP_ERROR", "Fallo GET: ${e.message}")
-            ""
-        }
-    }
-
-    /**
-     * Función para enviar datos (POST).
-     * El JS la usa para enviar formularios o IDs a APIs.
-     */
-    @JavascriptInterface
-    fun post(url: String, data: String): String {
-        return try {
-            ScreenLogger.log("HTTP", "📤 POST: $url")
-
-            // Usamos el tipo de contenido estándar para formularios web
-            val mediaType = "application/x-www-form-urlencoded; charset=UTF-8".toMediaType()
-            val body = data.toRequestBody(mediaType)
+    fun extract(iframeUrl: String): List<SourceLink> {
+        val links = mutableListOf<SourceLink>()
+        try {
+            ScreenLogger.log("NATIVE", "🕵️ Analizando: $iframeUrl")
 
             val request = Request.Builder()
-                .url(url)
-                .post(body)
+                .url(iframeUrl)
                 .header("User-Agent", USER_AGENT)
-                .header("X-Requested-With", "XMLHttpRequest") // Vital para APIs AJAX
-                .header("Origin", getOrigin(url))
-                .header("Referer", url) // Referer suele ser la misma URL en llamadas API
+                .header("Referer", "https://sololatino.net/")
                 .build()
 
-            client.newCall(request).execute().use { response ->
-                return@use response.body?.string() ?: "{}"
+            val response = client.newCall(request).execute()
+            val html = response.body?.string() ?: ""
+
+            // ESTRATEGIA A: JSON (Embed69 Moderno)
+            // Busca: let dataLink = [...];
+            if (html.contains("dataLink")) {
+                links.addAll(extractEmbed69Json(html))
             }
+
+            // ESTRATEGIA B: HTML Parsing (XuPalace / Legacy)
+            // Busca: go_to_playerVast('url') + data-lang="0"
+            if (links.isEmpty() || html.contains("go_to_player")) {
+                links.addAll(extractXuPalaceHtml(html))
+            }
+
         } catch (e: Exception) {
-            ScreenLogger.log("HTTP_ERROR", "Fallo POST: ${e.message}")
-            "{}"
+            ScreenLogger.log("NATIVE_ERROR", e.message ?: "Error desconocido")
+        }
+        
+        ScreenLogger.log("NATIVE", "✅ Total enlaces extraídos: ${links.size}")
+        return links
+    }
+
+    // --- LÓGICA EMBED69 (JSON) ---
+    private fun extractEmbed69Json(html: String): List<SourceLink> {
+        val found = mutableListOf<SourceLink>()
+        try {
+            val matcher = Pattern.compile("let\\s+dataLink\\s*=\\s*(\\[.*?\\]);", Pattern.DOTALL).matcher(html)
+            if (matcher.find()) {
+                val jsonArray = JSONArray(matcher.group(1))
+                for (i in 0 until jsonArray.length()) {
+                    val langGroup = jsonArray.getJSONObject(i)
+                    val langCode = langGroup.optString("video_language", "UNK")
+                    val prettyLang = mapLanguage(langCode)
+                    
+                    val embeds = langGroup.optJSONArray("sortedEmbeds") ?: continue
+                    for (j in 0 until embeds.length()) {
+                        val embed = embeds.getJSONObject(j)
+                        val server = embed.optString("servername", "Server")
+                        val link = embed.optString("link", "")
+                        
+                        if (!server.equals("download", true) && link.isNotEmpty()) {
+                            // Embed69 usa JWT en el JSON
+                            val realUrl = decodeJwt(link)
+                            if (realUrl != null) {
+                                found.add(createLink(server, realUrl, prettyLang))
+                            }
+                        }
+                    }
+                }
+                ScreenLogger.log("NATIVE", "🔹 Embed69 JSON detectado")
+            }
+        } catch (e: Exception) {}
+        return found
+    }
+
+    // --- LÓGICA XUPALACE (HTML + Mapeo de Idiomas) ---
+    private fun extractXuPalaceHtml(html: String): List<SourceLink> {
+        val found = mutableListOf<SourceLink>()
+        try {
+            // 1. Crear Mapa de Idiomas (ID -> Nombre)
+            // Busca: <li ... data-lang="0"> <img src=".../LAT.png">
+            val langMap = mutableMapOf<String, String>()
+            val langMatcher = Pattern.compile("data-lang=\"(\\d+)\"[^>]*>\\s*<img[^>]+src=\"[^\"]*/([A-Z]{3})\\.png\"", Pattern.CASE_INSENSITIVE).matcher(html)
+            
+            while (langMatcher.find()) {
+                val id = langMatcher.group(1) // "0"
+                val code = langMatcher.group(2) // "LAT"
+                if (id != null && code != null) {
+                    langMap[id] = mapLanguage(code)
+                }
+            }
+
+            // 2. Extraer Servidores
+            // Busca: onclick="go_to_playerVast('URL',...)" ... data-lang="0" ... <span>ServerName</span>
+            // Regex flexible para go_to_player O go_to_playerVast
+            val playerMatcher = Pattern.compile("onclick=\"go_to_player(?:Vast)?\\('([^']+)'[^>]*data-lang=\"(\\d+)\"[^>]*>.*?<span>(.*?)</span>", Pattern.DOTALL).matcher(html)
+            
+            while (playerMatcher.find()) {
+                val rawUrl = playerMatcher.group(1) // URL
+                val langId = playerMatcher.group(2) // "0"
+                val serverName = playerMatcher.group(3)?.trim() ?: "Server" // "streamwish"
+
+                if (rawUrl != null) {
+                    val lang = langMap[langId] ?: "Latino 🇲🇽" // Default si falla el mapa
+                    
+                    // A veces XuPalace pone la URL directa, a veces en Base64 o codificada
+                    // Pero en tu ejemplo (source 72) viene limpia: https://hglink.to/...
+                    
+                    // Filtrar enlaces basura
+                    if (rawUrl.startsWith("http")) {
+                        found.add(createLink(serverName, rawUrl, lang))
+                    }
+                }
+            }
+            if (found.isNotEmpty()) ScreenLogger.log("NATIVE", "🔸 XuPalace HTML detectado")
+
+        } catch (e: Exception) {}
+        return found
+    }
+
+    // --- UTILIDADES ---
+
+    private fun decodeJwt(token: String): String? {
+        return try {
+            val parts = token.split(".")
+            if (parts.size < 2) return null
+            val payload = parts[1]
+            val decodedBytes = Base64.decode(payload, Base64.URL_SAFE)
+            val json = JSONObject(String(decodedBytes))
+            json.optString("link")
+        } catch (e: Exception) { null }
+    }
+
+    private fun mapLanguage(code: String): String {
+        return when(code.uppercase()) {
+            "LAT", "LATINO" -> "Latino 🇲🇽"
+            "ESP", "CASTELLANO" -> "Castellano 🇪🇸"
+            "SUB", "SUBTITULADO" -> "Subtitulado 🇺🇸"
+            "JAP" -> "Japonés 🇯🇵"
+            else -> code
         }
     }
 
-    /**
-     * LA NUEVA ARMA SECRETA: EXTRACCIÓN HÍBRIDA
-     * El JS llama a esta función cuando encuentra un iframe de Embed69 o XuPalace.
-     * Kotlin recibe la URL, la procesa con NativeExtractor y devuelve el JSON listo.
-     */
-    @JavascriptInterface
-    fun resolveNative(url: String): String {
-        return try {
-            ScreenLogger.log("PUENTE", "🔄 JS solicita ayuda nativa para: $url")
-            
-            // 1. Llamamos al Soldado (NativeExtractor)
-            val links = NativeExtractor.extract(url)
-            
-            ScreenLogger.log("PUENTE", "✅ Kotlin extrajo ${links.size} servidores.")
+    private fun createLink(host: String, url: String, lang: String): SourceLink {
+        // Limpiar nombre del servidor (Ej: "streamwish" -> "Streamwish")
+        var prettyHost = host.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
+        
+        // Detectar si requiere WebView (casi todos los de XuPalace/Embed lo requieren hoy día)
+        // Excepto si encontramos un .mp4 directo
+        val isDirect = url.endsWith(".mp4") || url.endsWith(".m3u8")
 
-            // 2. Convertimos la lista de objetos Kotlin a JSON String para JS
-            val jsonArray = JSONArray()
-            links.forEach { link ->
-                val jsonObj = JSONObject()
-                jsonObj.put("server", link.name)
-                jsonObj.put("url", link.url)
-                jsonObj.put("quality", link.quality)
-                jsonObj.put("lang", link.language)
-                jsonObj.put("requiresWebView", link.requiresWebView)
-                jsonArray.put(jsonObj)
-            }
-            jsonArray.toString()
-
-        } catch (e: Exception) {
-            ScreenLogger.log("PUENTE_ERROR", "Fallo en resolveNative: ${e.message}")
-            "[]"
-        }
-    }
-
-    // Callbacks para sistemas legacy (si los usas)
-    private val callbacks = ConcurrentHashMap<String, (String) -> Unit>()
-    fun addCallback(id: String, callback: (String) -> Unit) { callbacks[id] = callback }
-    @JavascriptInterface
-    fun onResult(requestId: String, result: String) { callbacks.remove(requestId)?.invoke(result) }
-
-    // Utilidad para obtener el dominio base
-    private fun getOrigin(url: String): String {
-        return try {
-            val uri = java.net.URI(url)
-            "${uri.scheme}://${uri.host}"
-        } catch (e: Exception) { "" }
+        return SourceLink(
+            name = prettyHost,
+            url = url,
+            quality = "HD",
+            language = lang,
+            provider = "SoloLatino",
+            isDirect = isDirect,
+            requiresWebView = !isDirect
+        )
     }
 }
