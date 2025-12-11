@@ -2,7 +2,6 @@
 
 package com.kronos.tv
 
-// --- IMPORTS ---
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
@@ -33,15 +32,12 @@ import androidx.compose.ui.zIndex
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
-// --- TUS IMPORTS ---
 import com.kronos.tv.engine.ScriptEngine
 import com.kronos.tv.providers.ProviderManager
 import com.kronos.tv.ui.AppNavigation
-import com.kronos.tv.ui.LoadingScreen // <--- IMPORTANTE: El archivo nuevo
+import com.kronos.tv.ui.LoadingScreen
 import com.kronos.tv.ui.CrashActivity
 
 class MainActivity : ComponentActivity() {
@@ -49,8 +45,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 1. INICIALIZAR EL MOTOR
+        // 1. INICIALIZAR COMPONENTES
+        // ScriptEngine (JS) lo dejamos por si acaso, aunque usaremos Python
         ScriptEngine.initialize(this)
+        
+        // ProviderManager ahora iniciará Python internamente
         val providerManager = ProviderManager(this)
 
         // Crash Handler
@@ -66,25 +65,18 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            // --- ESTADOS DE LA INTERFAZ ---
             var showLogs by remember { mutableStateOf(true) }
-            var isSystemReady by remember { mutableStateOf(false) } // Controla si ya cargó
-            var loadingStatus by remember { mutableStateOf("Conectando con el servidor...") }
+            var isSystemReady by remember { mutableStateOf(false) }
+            var loadingStatus by remember { mutableStateOf("Iniciando sistema...") }
 
-            // --- LÓGICA DE CARGA INICIAL (Solo una vez) ---
+            // --- LÓGICA DE INICIO ---
             LaunchedEffect(Unit) {
-                val manifestUrl = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_script/manifest.json"
+                // Ya no descargamos nada de la nube al inicio.
+                // Python está listo en cuanto se instala la app.
+                loadingStatus = "Preparando motores..."
+                delay(1000) // Pequeña pausa estética
                 
-                // Paso 1: Descargar
-                loadingStatus = "Actualizando proveedores..."
-                ProviderManager.loadRemoteProviders(manifestUrl)
-                
-                // Paso 2: Pequeña pausa estética (opcional) para que no sea un parpadeo
-                // y asegurar que el WebView procesó los scripts
-                loadingStatus = "Finalizando configuración..."
-                delay(1500) 
-
-                // Paso 3: ¡Listo!
+                ScreenLogger.log("KRONOS", "🚀 Sistema listo (Modo Python Nativo)")
                 isSystemReady = true
             }
 
@@ -109,16 +101,12 @@ class MainActivity : ComponentActivity() {
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     
-                    // LÓGICA PRINCIPAL: ¿CARGANDO O APP?
                     if (!isSystemReady) {
-                        // A. PANTALLA DE CARGA
                         LoadingScreen(status = loadingStatus)
                     } else {
-                        // B. LA APP REAL
                         AppNavigation(providerManager)
                     }
 
-                    // C. LOGS (Siempre disponibles encima de todo)
                     if (showLogs) {
                         DebugOverlay()
                     }
@@ -150,11 +138,11 @@ fun DebugOverlay() {
                 .background(Color.Black.copy(alpha = 0.85f))
                 .padding(16.dp)
         ) {
-            item { Text("KRONOS DEBUG", color = Color.Yellow, fontSize = 14.sp) }
+            item { Text("KRONOS PYTHON DEBUG", color = Color.Cyan, fontSize = 14.sp) }
             items(ScreenLogger.logs.size) { index ->
                 Text(
                     text = ScreenLogger.logs[index],
-                    color = if (ScreenLogger.logs[index].contains("ERROR")) Color.Red else Color.Green,
+                    color = if (ScreenLogger.logs[index].contains("ERROR") || ScreenLogger.logs[index].contains("ERR")) Color.Red else Color.Green,
                     fontSize = 12.sp,
                     lineHeight = 14.sp,
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
