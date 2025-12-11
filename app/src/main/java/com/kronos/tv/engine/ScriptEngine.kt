@@ -12,8 +12,8 @@ import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.net.URL
+import java.util.UUID
 import kotlin.coroutines.resume
 
 object ScriptEngine {
@@ -21,7 +21,7 @@ object ScriptEngine {
     private var webView: WebView? = null
     private var isInitialized = false
     private val uiHandler = Handler(Looper.getMainLooper())
-    private val bridge = JsBridge() 
+    private val bridge = JsBridge()
 
     private const val BASE_JS_ENV = "var KronosEngine = KronosEngine || { providers: {} };"
 
@@ -32,9 +32,9 @@ object ScriptEngine {
                 webView = WebView(context)
                 setupWebView(webView!!)
                 isInitialized = true
-                Log.d("KRONOS_ENGINE", "Motor WebView Iniciado 🚀")
+                Log.d("KRONOS", "Motor WebView Iniciado (Modo Nube) 🚀")
             } catch (e: Exception) {
-                Log.e("KRONOS_ENGINE", "Error iniciando WebView: ${e.message}")
+                Log.e("KRONOS", "Error crítico iniciando WebView: ${e.message}")
             }
         }
     }
@@ -44,74 +44,67 @@ object ScriptEngine {
         val settings = wv.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
-        // IMPORTANTE: Habilitar acceso total para evitar bloqueos CORS en iframes piratas
         settings.allowFileAccess = true
         settings.allowContentAccess = true
         settings.allowFileAccessFromFileURLs = true
         settings.allowUniversalAccessFromFileURLs = true
         settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         
-        settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-        
         wv.addJavascriptInterface(bridge, "bridge")
         
         wv.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
-                if (cm?.message()?.contains("blocked by CORS") == true) return true // Ignorar spam
-                Log.d("KRONOS_JS_CONSOLE", "${cm?.message()}")
+                if (cm?.message()?.contains("blocked") == true) return true
+                // Log.d("JS_CONSOLE", "${cm?.message()}") // Descomentar si quieres ver todo el spam de JS
                 return true
             }
         }
+        
         wv.webViewClient = object : WebViewClient() {
-            override fun onReceivedSslError(view: WebView?, handler: android.webkit.SslErrorHandler?, error: android.net.http.SslError?) {
-                handler?.proceed() // Ignorar errores SSL en sitios piratas
+             override fun onReceivedSslError(view: WebView?, handler: android.webkit.SslErrorHandler?, error: android.net.http.SslError?) {
+                handler?.proceed() // Ignorar errores SSL de sitios piratas
             }
         }
+
         wv.evaluateJavascript(BASE_JS_ENV, null)
     }
 
-    suspend fun loadManifest(manifestUrl: String) = withContext(Dispatchers.IO) {
-        if (!isInitialized) return@withContext
-        try {
-            val content = URL(manifestUrl).readText()
-            val json = JSONObject(content)
-            val scripts = json.getJSONArray("scripts")
-            for (i in 0 until scripts.length()) {
-                loadScriptFromUrl(scripts.getString(i))
-            }
-        } catch (e: Exception) {}
-    }
-    
     suspend fun loadScriptFromUrl(url: String) {
         try {
-            val content = URL(url).readText()
-            withContext(Dispatchers.Main) { webView?.evaluateJavascript(content, null) }
-        } catch (e: Exception) {}
-    }
-    
-    suspend fun loadScript(jsCode: String) = withContext(Dispatchers.Main) {
-        webView?.evaluateJavascript(jsCode, null)
+            val content = withContext(Dispatchers.IO) { URL(url).readText() }
+            withContext(Dispatchers.Main) { 
+                webView?.evaluateJavascript(content, null) 
+            }
+        } catch (e: Exception) {
+            Log.e("KRONOS", "Fallo al descargar script: $url")
+        }
     }
 
-    // --- FUNCIÓN CALLBACK FINAL ---
+    // FUNCIÓN CORE: Ahora maneja concurrencia con UUIDs
     suspend fun queryProvider(providerName: String, functionName: String, args: Array<Any>): String? = suspendCancellableCoroutine { cont ->
+        
+        val requestId = UUID.randomUUID().toString()
+        
         val argsString = args.joinToString(",") { 
             if (it is String) "'${it.replace("'", "\\'")}'" else it.toString() 
         }
 
-        bridge.onResultCallback = { result ->
-            bridge.onResultCallback = null
+        // Registramos la oreja para escuchar la respuesta específica de este ID
+        bridge.addCallback(requestId) { result ->
             if (cont.isActive) cont.resume(result)
         }
 
         val jsCode = """
             (async function() {
                 try {
+                    if (!KronosEngine.providers['$providerName']) {
+                        throw new Error("Provider not found");
+                    }
                     const result = await KronosEngine.providers['$providerName'].$functionName($argsString);
-                    bridge.onResult(JSON.stringify(result));
+                    bridge.onResult('$requestId', JSON.stringify(result));
                 } catch(e) {
-                    bridge.log("JS ERROR: " + e.message);
-                    bridge.onResult("[]");
+                    bridge.log("JS ERROR ($providerName): " + e.message);
+                    bridge.onResult('$requestId', "[]");
                 }
             })()
         """.trimIndent()
