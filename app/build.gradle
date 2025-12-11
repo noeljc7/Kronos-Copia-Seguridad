@@ -14,13 +14,14 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
-    }
 
-    ndk {
+        // --- CORRECCIÓN: ndk va DENTRO de defaultConfig ---
+        ndk {
             // Esto es vital para que la app no pese 500MB. Solo arquitecturas de TV/Móvil modernas.
             abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
         }
 
+        // --- CORRECCIÓN: python va DENTRO de defaultConfig ---
         python {
             version "3.8" // Usamos Python 3.8 que es muy estable
             
@@ -31,7 +32,7 @@ android {
                 install "beautifulsoup4"
             }
         }
-    }
+    } // <--- AQUÍ SE CIERRA defaultConfig (¡NO ANTES!)
 
     buildTypes {
         release {
@@ -39,21 +40,25 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+    
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+    
     kotlinOptions {
         jvmTarget = '1.8'
     }
+    
     buildFeatures {
         compose true
     }
+    
     composeOptions {
-        // --- AQUÍ ESTÁ EL ARREGLO ---
-        // Cambiamos de '1.5.1' a '1.5.8' para que coincida con Kotlin 1.9.22
+        // Asegúrate de que esto coincida con tu versión de Kotlin (1.9.22 suele usar 1.5.8 o superior)
         kotlinCompilerExtensionVersion '1.5.8'
     }
+} // <--- AQUÍ SE CIERRA EL BLOQUE android
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
@@ -94,5 +99,5 @@ dependencies {
     // --- ICONOS PRO (ESTA ES LA CLAVE) ---
     implementation "androidx.compose.material:material-icons-extended:1.6.0"
 
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0") // O la versión que sea compatible con tu compose
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0") 
 }
