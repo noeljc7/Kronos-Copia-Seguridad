@@ -13,7 +13,6 @@ class PythonProvider(context: Context) : KronosProvider {
     override val name = "SoloLatino (Python)"
     override val language = "Latino"
 
-    // Inicialización del motor Python
     init {
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(context))
@@ -21,13 +20,14 @@ class PythonProvider(context: Context) : KronosProvider {
     }
 
     private val python = Python.getInstance()
-    private val scraperModule = python.getModule("scraper") // Nombre de tu archivo .py
+    private val scraperModule = python.getModule("scraper")
 
     override suspend fun search(query: String): List<com.kronos.tv.models.SearchResult> {
         return withContext(Dispatchers.IO) {
             try {
-                // Llamamos a la función 'search' de Python
-                val jsonStr = scraperModule.callAttr("search", query).toString()
+                // CORRECCIÓN 1: Manejo seguro de nulos
+                val pyObject = scraperModule.callAttr("search", query)
+                val jsonStr = pyObject?.toString() ?: "[]"
                 parseSearchResults(jsonStr)
             } catch (e: Exception) {
                 ScreenLogger.log("PYTHON_ERR", e.message ?: "Error desconocido")
@@ -38,18 +38,14 @@ class PythonProvider(context: Context) : KronosProvider {
 
     override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
         return withContext(Dispatchers.IO) {
-            // 1. Primero buscamos la serie para obtener la URL
-            // (Simplificado: asumimos que search encuentra la serie correcta primero)
             val searchResults = search(showTitle)
             val series = searchResults.firstOrNull() ?: return@withContext emptyList()
             
-            // 2. Construimos la URL del episodio (o dejamos que Python lo busque)
-            // Para simplificar, mandaremos la URL de la serie y que Python busque el episodio
-            // Ojo: Tu script Python actual 'get_links' espera URL del episodio.
-            // Ajuste rápido: URL web aproximada
-            val slug = series.url // https://sololatino.net/series/titulo/
-            val episodeUrl = "${slug.trimEnd('/')}-${season}x$episode/" 
+            // CORRECCIÓN 2: Construcción segura de URL
+            val slug = series.url?.trimEnd('/') ?: ""
+            if (slug.isEmpty()) return@withContext emptyList()
             
+            val episodeUrl = "$slug-${season}x$episode/" 
             resolveUrl(episodeUrl)
         }
     }
@@ -58,14 +54,17 @@ class PythonProvider(context: Context) : KronosProvider {
          return withContext(Dispatchers.IO) {
             val searchResults = search(title)
             val movie = searchResults.firstOrNull() ?: return@withContext emptyList()
-            resolveUrl(movie.url)
+            
+            val movieUrl = movie.url ?: return@withContext emptyList()
+            resolveUrl(movieUrl)
          }
     }
 
     private fun resolveUrl(url: String): List<SourceLink> {
         return try {
             ScreenLogger.log("PYTHON", "Resolviendo: $url")
-            val jsonStr = scraperModule.callAttr("get_links", url).toString()
+            val pyObject = scraperModule.callAttr("get_links", url)
+            val jsonStr = pyObject?.toString() ?: "[]"
             parseSourceLinks(jsonStr)
         } catch (e: Exception) {
             ScreenLogger.log("PYTHON_ERR", e.message ?: "")
@@ -73,8 +72,6 @@ class PythonProvider(context: Context) : KronosProvider {
         }
     }
 
-    // --- PARSERS JSON ---
-    
     private fun parseSourceLinks(json: String): List<SourceLink> {
         val list = mutableListOf<SourceLink>()
         try {
@@ -82,8 +79,8 @@ class PythonProvider(context: Context) : KronosProvider {
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
                 list.add(SourceLink(
-                    name = obj.optString("server"),
-                    url = obj.optString("url"),
+                    name = obj.optString("server", "Server"),
+                    url = obj.optString("url", ""),
                     quality = "HD",
                     language = "Multi",
                     provider = "Python",
@@ -106,14 +103,15 @@ class PythonProvider(context: Context) : KronosProvider {
                     url = obj.optString("url"),
                     img = obj.optString("img"),
                     year = obj.optString("year"),
-                    type = obj.optString("type")
+                    type = obj.optString("type"),
+                    id = obj.optString("url") // Usamos URL como ID temporal
                 ))
             }
         } catch (e: Exception) {}
         return list
     }
     
-    // Funciones legacy vacías
     override suspend fun loadEpisodes(url: String) = emptyList<com.kronos.tv.models.Episode>()
+    // CORRECCIÓN 3: Implementación correcta de la interfaz (parámetros dummy)
     override suspend fun loadStream(id: String, type: String): String? = null
 }
