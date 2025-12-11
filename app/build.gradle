@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+    id 'com.chaquo.python'
 }
 
 android {
@@ -9,10 +10,27 @@ android {
 
     defaultConfig {
         applicationId "com.kronos.tv"
-        minSdk 21
+        minSdk 24
         targetSdk 34
         versionCode 1
         versionName "1.0"
+    }
+
+    ndk {
+            // Esto es vital para que la app no pese 500MB. Solo arquitecturas de TV/Móvil modernas.
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
+
+        python {
+            version "3.8" // Usamos Python 3.8 que es muy estable
+            
+            // 👇 AQUÍ INSTALAMOS LAS LIBRERÍAS DE KODI
+            pip {
+                install "cloudscraper" // El rey para saltar Cloudflare
+                install "requests"
+                install "beautifulsoup4"
+            }
+        }
     }
 
     buildTypes {
