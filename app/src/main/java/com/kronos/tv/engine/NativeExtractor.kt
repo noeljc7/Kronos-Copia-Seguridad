@@ -1,112 +1,174 @@
 package com.kronos.tv.engine
 
+import android.util.Base64
 import com.kronos.tv.ScreenLogger
 import com.kronos.tv.providers.SourceLink
-import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.regex.Pattern
 import java.util.concurrent.TimeUnit
 
 object NativeExtractor {
 
-    // Cliente HTTP independiente para no mezclar cookies con el navegador
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
-    // Cabeceras que TU encontraste en los logs (User-Agent de Windows)
     private val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
-    /**
-     * Recibe: https://xupalace.org/video/tt0434665-14x37
-     * Devuelve: Lista de SourceLink (Voe, Streamwish, etc)
-     */
     fun extract(iframeUrl: String): List<SourceLink> {
         val links = mutableListOf<SourceLink>()
-        
         try {
-            ScreenLogger.log("NATIVE", "🔓 Desencriptando: $iframeUrl")
-
-            // 1. Detección de Dominio y ID
-            // Tu log mostró: /video/ID o /f/ID
-            val matcher = Pattern.compile("/(?:f|video)/([a-zA-Z0-9-]+)").matcher(iframeUrl)
-            if (!matcher.find()) {
-                ScreenLogger.log("NATIVE", "⚠️ No se encontró ID en la URL")
-                return emptyList()
-            }
-            
-            val videoId = matcher.group(1) // Ej: tt0434665-14x37
-            val domain = if (iframeUrl.contains("xupalace")) "https://xupalace.org" else "https://embed69.org"
-            val apiUrl = "$domain/api/decrypt"
-
-            // 2. Construir la Petición (Exactamente como en tu Log)
-            val body = FormBody.Builder()
-                .add("id", videoId!!)
-                .build()
+            ScreenLogger.log("NATIVE", "🕵️ Analizando: $iframeUrl")
 
             val request = Request.Builder()
-                .url(apiUrl)
-                .post(body) // Método POST
+                .url(iframeUrl)
                 .header("User-Agent", USER_AGENT)
-                .header("Referer", iframeUrl) // Referer es la misma URL del video
-                .header("X-Requested-With", "XMLHttpRequest") // CRÍTICO: Sin esto falla
-                .header("Origin", domain)
+                .header("Referer", "https://sololatino.net/")
                 .build()
 
-            // 3. Disparar
             val response = client.newCall(request).execute()
-            val jsonStr = response.body?.string() ?: "{}"
+            val html = response.body?.string() ?: ""
 
-            // 4. Parsear el JSON que encontraste: {"success":true,"links":[{...}]}
-            val json = JSONObject(jsonStr)
-            
-            if (json.optBoolean("success")) {
-                val array = json.optJSONArray("links")
-                if (array != null) {
-                    for (i in 0 until array.length()) {
-                        val item = array.getJSONObject(i)
-                        val finalUrl = item.optString("link").replace("\\", "") // Limpiar escapes
-                        
-                        if (finalUrl.isNotEmpty()) {
-                            links.add(identifyServer(finalUrl))
-                        }
-                    }
-                }
-                ScreenLogger.log("NATIVE", "✅ Éxito: ${links.size} servidores extraídos")
-            } else {
-                ScreenLogger.log("NATIVE", "❌ API respondió false o error")
+            // ESTRATEGIA A: JSON (Embed69 Moderno)
+            // Busca: let dataLink = [...];
+            if (html.contains("dataLink")) {
+                links.addAll(extractEmbed69Json(html))
+            }
+
+            // ESTRATEGIA B: HTML Parsing (XuPalace / Legacy)
+            // Busca: go_to_playerVast('url') + data-lang="0"
+            if (links.isEmpty() || html.contains("go_to_player")) {
+                links.addAll(extractXuPalaceHtml(html))
             }
 
         } catch (e: Exception) {
-            ScreenLogger.log("NATIVE", "Error crítico: ${e.message}")
+            ScreenLogger.log("NATIVE_ERROR", e.message ?: "Error desconocido")
         }
+        
+        ScreenLogger.log("NATIVE", "✅ Total enlaces extraídos: ${links.size}")
         return links
     }
 
-    private fun identifyServer(url: String): SourceLink {
-        var name = "Server"
-        val u = url.lowercase()
-        
-        if (u.contains("voe")) name = "Voe"
-        else if (u.contains("dintezuvio") || u.contains("dood")) name = "Doodstream"
-        else if (u.contains("filemoon")) name = "Filemoon"
-        else if (u.contains("streamwish")) name = "Streamwish"
-        else if (u.contains("vidhide")) name = "Vidhide"
-        else if (u.contains("hglink")) name = "3Qi" // HgLink suele ser fast
-        else if (u.contains("1fichier")) name = "1Fichier"
+    // --- LÓGICA EMBED69 (JSON) ---
+    private fun extractEmbed69Json(html: String): List<SourceLink> {
+        val found = mutableListOf<SourceLink>()
+        try {
+            val matcher = Pattern.compile("let\\s+dataLink\\s*=\\s*(\\[.*?\\]);", Pattern.DOTALL).matcher(html)
+            if (matcher.find()) {
+                val jsonArray = JSONArray(matcher.group(1))
+                for (i in 0 until jsonArray.length()) {
+                    val langGroup = jsonArray.getJSONObject(i)
+                    val langCode = langGroup.optString("video_language", "UNK")
+                    val prettyLang = mapLanguage(langCode)
+                    
+                    val embeds = langGroup.optJSONArray("sortedEmbeds") ?: continue
+                    for (j in 0 until embeds.length()) {
+                        val embed = embeds.getJSONObject(j)
+                        val server = embed.optString("servername", "Server")
+                        val link = embed.optString("link", "")
+                        
+                        if (!server.equals("download", true) && link.isNotEmpty()) {
+                            // Embed69 usa JWT en el JSON
+                            val realUrl = decodeJwt(link)
+                            if (realUrl != null) {
+                                found.add(createLink(server, realUrl, prettyLang))
+                            }
+                        }
+                    }
+                }
+                ScreenLogger.log("NATIVE", "🔹 Embed69 JSON detectado")
+            }
+        } catch (e: Exception) {}
+        return found
+    }
 
-        // Detectar si es video directo (.mp4/.m3u8) o requiere web
-        val isDirect = u.endsWith(".mp4") || u.endsWith(".m3u8")
+    // --- LÓGICA XUPALACE (HTML + Mapeo de Idiomas) ---
+    private fun extractXuPalaceHtml(html: String): List<SourceLink> {
+        val found = mutableListOf<SourceLink>()
+        try {
+            // 1. Crear Mapa de Idiomas (ID -> Nombre)
+            // Busca: <li ... data-lang="0"> <img src=".../LAT.png">
+            val langMap = mutableMapOf<String, String>()
+            val langMatcher = Pattern.compile("data-lang=\"(\\d+)\"[^>]*>\\s*<img[^>]+src=\"[^\"]*/([A-Z]{3})\\.png\"", Pattern.CASE_INSENSITIVE).matcher(html)
+            
+            while (langMatcher.find()) {
+                val id = langMatcher.group(1) // "0"
+                val code = langMatcher.group(2) // "LAT"
+                if (id != null && code != null) {
+                    langMap[id] = mapLanguage(code)
+                }
+            }
+
+            // 2. Extraer Servidores
+            // Busca: onclick="go_to_playerVast('URL',...)" ... data-lang="0" ... <span>ServerName</span>
+            // Regex flexible para go_to_player O go_to_playerVast
+            val playerMatcher = Pattern.compile("onclick=\"go_to_player(?:Vast)?\\('([^']+)'[^>]*data-lang=\"(\\d+)\"[^>]*>.*?<span>(.*?)</span>", Pattern.DOTALL).matcher(html)
+            
+            while (playerMatcher.find()) {
+                val rawUrl = playerMatcher.group(1) // URL
+                val langId = playerMatcher.group(2) // "0"
+                val serverName = playerMatcher.group(3)?.trim() ?: "Server" // "streamwish"
+
+                if (rawUrl != null) {
+                    val lang = langMap[langId] ?: "Latino 🇲🇽" // Default si falla el mapa
+                    
+                    // A veces XuPalace pone la URL directa, a veces en Base64 o codificada
+                    // Pero en tu ejemplo (source 72) viene limpia: https://hglink.to/...
+                    
+                    // Filtrar enlaces basura
+                    if (rawUrl.startsWith("http")) {
+                        found.add(createLink(serverName, rawUrl, lang))
+                    }
+                }
+            }
+            if (found.isNotEmpty()) ScreenLogger.log("NATIVE", "🔸 XuPalace HTML detectado")
+
+        } catch (e: Exception) {}
+        return found
+    }
+
+    // --- UTILIDADES ---
+
+    private fun decodeJwt(token: String): String? {
+        return try {
+            val parts = token.split(".")
+            if (parts.size < 2) return null
+            val payload = parts[1]
+            val decodedBytes = Base64.decode(payload, Base64.URL_SAFE)
+            val json = JSONObject(String(decodedBytes))
+            json.optString("link")
+        } catch (e: Exception) { null }
+    }
+
+    private fun mapLanguage(code: String): String {
+        return when(code.uppercase()) {
+            "LAT", "LATINO" -> "Latino 🇲🇽"
+            "ESP", "CASTELLANO" -> "Castellano 🇪🇸"
+            "SUB", "SUBTITULADO" -> "Subtitulado 🇺🇸"
+            "JAP" -> "Japonés 🇯🇵"
+            else -> code
+        }
+    }
+
+    private fun createLink(host: String, url: String, lang: String): SourceLink {
+        // Limpiar nombre del servidor (Ej: "streamwish" -> "Streamwish")
+        var prettyHost = host.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
+        
+        // Detectar si requiere WebView (casi todos los de XuPalace/Embed lo requieren hoy día)
+        // Excepto si encontramos un .mp4 directo
+        val isDirect = url.endsWith(".mp4") || url.endsWith(".m3u8")
 
         return SourceLink(
-            name = name,
+            name = prettyHost,
             url = url,
             quality = "HD",
-            language = "Multi", 
+            language = lang,
             provider = "SoloLatino",
             isDirect = isDirect,
             requiresWebView = !isDirect
