@@ -1,11 +1,12 @@
 package com.kronos.tv.providers
 
 import android.content.Context
-import com.kronos.tv.ScreenLogger // Asegúrate de que esto no de error (está en MainActivity)
+import com.kronos.tv.ScreenLogger
 import com.kronos.tv.engine.ScriptEngine
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
@@ -15,41 +16,43 @@ data class SourceLink(
     val url: String,
     val quality: String,
     val language: String,
-    val provider: String = "", 
+    val provider: String = "",
     val isDirect: Boolean = false,
     val requiresWebView: Boolean = false
 )
 
 class ProviderManager(private val context: Context) {
 
-    // Lista de proveedores LOCALES (Assets)
-    private val localProviders = mutableListOf<KronosProvider>()
+    // YA NO HAY PROVEEDORES LOCALES
+    // Todo vive en el Companion Object (Estático) cargado desde la nube
 
     companion object {
-        // Lista de proveedores REMOTOS (Nube)
+        // Única fuente de verdad
         val remoteProviders = mutableListOf<KronosProvider>()
         private var isRemoteLoaded = false
 
         suspend fun loadRemoteProviders(manifestUrl: String) = withContext(Dispatchers.IO) {
-            if (isRemoteLoaded) return@withContext
+            // Reiniciamos la lista cada vez que cargamos para evitar duplicados si se reintenta
+            remoteProviders.clear()
+            isRemoteLoaded = false
             
             try {
-                ScreenLogger.log("KRONOS", "☁️ Descargando Manifest...")
+                ScreenLogger.log("KRONOS", "☁️ Conectando a la Nave Nodriza...")
+                ScreenLogger.log("KRONOS", "URL: $manifestUrl")
+
                 val jsonStr = URL(manifestUrl).readText()
                 val json = JSONObject(jsonStr)
 
-                // 1. Cargar Scripts JS
+                // 1. Cargar Scripts JS (El cerebro)
                 if (json.has("scripts")) {
                     val scripts = json.getJSONArray("scripts")
-                    ScreenLogger.log("KRONOS", "📜 Procesando ${scripts.length()} scripts...")
                     for (i in 0 until scripts.length()) {
                         val scriptUrl = scripts.getString(i)
-                        ScreenLogger.log("KRONOS", "⬇️ Bajando: ${scriptUrl.substringAfterLast("/")}")
                         ScriptEngine.loadScriptFromUrl(scriptUrl)
                     }
                 }
 
-                // 2. Registrar Proveedores
+                // 2. Registrar Proveedores (Los obreros)
                 if (json.has("providers")) {
                     val remoteList = json.getJSONArray("providers")
                     for (i in 0 until remoteList.length()) {
@@ -57,98 +60,62 @@ class ProviderManager(private val context: Context) {
                         val id = p.getString("id")
                         val name = p.getString("name")
                         
-                        // Evitar duplicados si ya existe
-                        if (remoteProviders.none { it.name == id }) {
-                            remoteProviders.add(JsContentProvider(id, name))
-                            ScreenLogger.log("KRONOS", "✅ PROVEEDOR REGISTRADO: $id")
-                        }
+                        remoteProviders.add(JsContentProvider(id, name))
+                        ScreenLogger.log("KRONOS", "✅ Proveedor Activado: $name")
                     }
                 }
-                isRemoteLoaded = true
-                ScreenLogger.log("KRONOS", "🎉 ¡Carga remota EXITOSA!")
+                
+                if (remoteProviders.isEmpty()) {
+                    ScreenLogger.log("ALERTA", "⚠️ El manifiesto no contiene proveedores. La app está vacía.")
+                } else {
+                    isRemoteLoaded = true
+                    ScreenLogger.log("KRONOS", "🎉 Sistema Remoto Cargado: ${remoteProviders.size} fuentes.")
+                }
 
             } catch (e: Exception) {
-                ScreenLogger.log("ERROR", "❌ FALLO NUBE: ${e.message}")
+                ScreenLogger.log("ERROR", "❌ ERROR FATAL DE CONEXIÓN: ${e.message}")
+                ScreenLogger.log("INFO", "La app no funcionará sin acceso al manifiesto.")
             }
         }
     }
 
-    init {
-        loadLocalDebugProvider()
-    }
+    // Ya no hay init {} ni carga local
 
-    private fun loadLocalDebugProvider() {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                // Intentamos cargar SoloLatino de los assets como respaldo
-                val inputStream = context.assets.open("sololatino.js")
-                val size = inputStream.available()
-                val buffer = ByteArray(size)
-                inputStream.read(buffer)
-                inputStream.close()
-                val jsCode = String(buffer, Charsets.UTF_8)
-
-                withContext(Dispatchers.Main) {
-                    ScriptEngine.loadScript(jsCode)
-                    
-                    val providerId = "sololatino"
-                    if (localProviders.none { it.name == providerId }) {
-                        localProviders.add(JsContentProvider(providerId, "SoloLatino (Local)"))
-                        ScreenLogger.log("KRONOS", "💿 Provider Local Listo")
-                    }
-                }
-            } catch (e: java.io.FileNotFoundException) {
-                // Es normal si lo borraste de assets y solo usas nube
-                ScreenLogger.log("INFO", "⚠️ Sin respaldo local (Usando solo nube)")
-            } catch (e: Exception) {
-                ScreenLogger.log("ERROR", "❌ Error Asset: ${e.message}")
-            }
-        }
-    }
-
-    // --- AQUÍ ESTABA EL PROBLEMA, AHORA ESTÁ CORREGIDO ---
     suspend fun getLinks(
         tmdbId: Int, 
         title: String, 
         originalTitle: String, 
         isMovie: Boolean, 
-        year: Int,             
+        year: Int,              
         season: Int = 0, 
         episode: Int = 0
-    ): List<SourceLink> = withContext(Dispatchers.IO) {
+    ): List<SourceLink> = coroutineScope {
         
-        // 1. FUSIÓN DINÁMICA: Juntamos locales + remotos AL MOMENTO DE BUSCAR
-        // Usamos distinctBy para que si sololatino está en los dos lados, solo salga una vez
-        val activeProviders = (localProviders + remoteProviders).distinctBy { it.name }
-        
-        ScreenLogger.log("KRONOS", "🔍 Buscando '${title}' en ${activeProviders.size} fuentes...")
-        
-        val allLinks = mutableListOf<SourceLink>()
+        // Si no hay proveedores remotos, retornamos vacío inmediatamente
+        if (remoteProviders.isEmpty()) {
+            ScreenLogger.log("KRONOS", "⛔ Solicitud rechazada: No hay proveedores cargados.")
+            return@coroutineScope emptyList()
+        }
 
-        // 2. Loop de Búsqueda
-        for (provider in activeProviders) {
-            try {
-                ScreenLogger.log("KRONOS", "👉 Consultando a: ${provider.name}")
-                
-                val links = if (isMovie) {
-                    provider.getMovieLinks(tmdbId, title, originalTitle, year)
-                } else {
-                    provider.getEpisodeLinks(tmdbId, title, season, episode)
+        ScreenLogger.log("KRONOS", "⚡ Buscando en la nube (${remoteProviders.size} fuentes)...")
+        
+        // Búsqueda Paralela (Optimizada)
+        val deferredResults = remoteProviders.map { provider ->
+            async(Dispatchers.IO) {
+                try {
+                    if (isMovie) {
+                        provider.getMovieLinks(tmdbId, title, originalTitle, year)
+                    } else {
+                        provider.getEpisodeLinks(tmdbId, title, season, episode)
+                    }
+                } catch (e: Exception) {
+                    ScreenLogger.log("ERROR", "❌ ${provider.name}: ${e.message}")
+                    emptyList<SourceLink>()
                 }
-                
-                if (links.isNotEmpty()) {
-                    ScreenLogger.log("KRONOS", "✅ ${provider.name}: ${links.size} enlaces encontrados")
-                    allLinks.addAll(links)
-                } else {
-                    ScreenLogger.log("KRONOS", "⚠️ ${provider.name}: Sin resultados")
-                }
-                
-            } catch (e: Exception) {
-                ScreenLogger.log("ERROR", "❌ Fallo en ${provider.name}: ${e.message}")
             }
         }
-        
-        // Retornar lista ordenada por calidad
-        return@withContext allLinks.sortedByDescending { it.quality }
+
+        val results = deferredResults.awaitAll().flatten()
+        return@coroutineScope results.sortedByDescending { it.quality }
     }
 }
