@@ -54,7 +54,6 @@ android {
         // Cambiamos de '1.5.1' a '1.5.8' para que coincida con Kotlin 1.9.22
         kotlinCompilerExtensionVersion '1.5.8'
     }
-}
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
