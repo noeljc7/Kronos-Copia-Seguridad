@@ -24,7 +24,6 @@ class PythonProvider(context: Context) : KronosProvider {
     }
 
     private val python = Python.getInstance()
-    // Asegúrate de que tu archivo python se llame 'scraper.py' en la carpeta assets/python
     private val scraperModule = try {
         python.getModule("scraper")
     } catch (e: Exception) {
@@ -32,34 +31,100 @@ class PythonProvider(context: Context) : KronosProvider {
         null
     }
 
+    // --- PELÍCULAS ---
     override suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink> {
         return withContext(Dispatchers.IO) {
-            val bestMatch = findBestMatch(title, originalTitle, year, "movie")
+            // Buscamos SOLO por nombre. El año lo verificamos después.
+            val bestMatch = smartSearch(title, originalTitle, year, "movie")
+            
             if (bestMatch == null) {
-                ScreenLogger.log("KRONOS", "⛔ ${name}: No se encontró película compatible.")
+                ScreenLogger.log("KRONOS", "⛔ No se encontró la película '$title' ($year)")
                 return@withContext emptyList()
             }
-            ScreenLogger.log("KRONOS", "🎯 Match: ${bestMatch.title}")
+
+            ScreenLogger.log("KRONOS", "🎯 Encontrado: '${bestMatch.title}' (Año detectado: ${bestMatch.year})")
             resolveUrl(bestMatch.url ?: "")
         }
     }
 
+    // --- SERIES ---
     override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
         return withContext(Dispatchers.IO) {
-            val bestMatch = findBestMatch(showTitle, showTitle, 0, "tv")
+            val bestMatch = smartSearch(showTitle, showTitle, 0, "tv")
+            
             if (bestMatch == null) {
-                ScreenLogger.log("KRONOS", "❌ ${name}: No se encontró la serie.")
+                ScreenLogger.log("KRONOS", "❌ No se encontró la serie '$showTitle'")
                 return@withContext emptyList()
             }
-            
+
+            // Convertir URL de serie a episodio
             val showUrl = bestMatch.url ?: ""
             if (showUrl.isEmpty()) return@withContext emptyList()
 
-            // Lógica de transformación de URL para SoloLatino
-            val slug = showUrl.replace("/series/", "/episodios/").trimEnd('/')
-            val episodeUrl = "$slug-${season}x$episode/"
+            var slug = showUrl
+                .replace("/series/", "/episodios/")
+                .replace("/tvshows/", "/episodios/")
+                .trimEnd('/')
 
+            val episodeUrl = "$slug-${season}x$episode/"
+            ScreenLogger.log("KRONOS", "📺 URL Generada: $episodeUrl")
             resolveUrl(episodeUrl)
+        }
+    }
+
+    // --- BÚSQUEDA Y FILTRADO ---
+    private suspend fun smartSearch(title: String, originalTitle: String, year: Int, type: String): SearchResult? {
+        val cleanTitle = cleanString(title)
+        val cleanOriginal = cleanString(originalTitle)
+        
+        val allCandidates = mutableListOf<SearchResult>()
+
+        // 1. Buscar Título en Español (SOLO TÍTULO)
+        ScreenLogger.log("KRONOS", "🔎 Buscando: '$cleanTitle'")
+        allCandidates.addAll(searchInternal(cleanTitle))
+
+        // 2. Buscar Título Original (Si es diferente y no es asiático)
+        if (cleanOriginal.isNotEmpty() && cleanOriginal != cleanTitle && !isAsianText(cleanOriginal)) {
+            ScreenLogger.log("KRONOS", "🔎 Buscando Original: '$cleanOriginal'")
+            allCandidates.addAll(searchInternal(cleanOriginal))
+        }
+
+        if (allCandidates.isEmpty()) return null
+
+        val targetEs = normalize(title)
+        val targetEn = normalize(originalTitle)
+        
+        // Filtramos candidatos
+        val validCandidates = allCandidates
+            .distinctBy { it.url }
+            .filter { 
+                it.type == type || 
+                (type == "tv" && it.url?.contains("/series/") == true) || 
+                (type == "movie" && it.url?.contains("/peliculas/") == true)
+            }
+
+        // --- AQUÍ OCURRE EL FILTRADO POR AÑO ---
+        return validCandidates.minByOrNull { cand ->
+            val currentTitle = normalize(cand.title ?: "")
+            // El año viene del HTML que parseó Python
+            val candYear = cand.year?.toIntOrNull() ?: 0
+            
+            var score = 100
+            
+            // Nombre
+            if (currentTitle.contains(targetEs) || targetEs.contains(currentTitle)) score -= 50
+            if (currentTitle.contains(targetEn) || targetEn.contains(currentTitle)) score -= 50
+            
+            // Año
+            if (type == "movie" && year > 0 && candYear > 0) {
+                val diff = abs(year - candYear)
+                if (diff <= 1) {
+                    score -= 40 // Año coincide (+/- 1) -> PREMIO
+                } else {
+                    score += 500 // Año no coincide -> CASTIGO (Descartar)
+                }
+            }
+            score
         }
     }
 
@@ -69,53 +134,8 @@ class PythonProvider(context: Context) : KronosProvider {
             val pyObject = scraperModule.callAttr("get_links", url)
             val jsonStr = pyObject?.toString() ?: "[]"
             parseSourceLinks(jsonStr)
-        } catch (e: Exception) {
-            ScreenLogger.log("PYTHON_ERR", "Error en get_links: ${e.message}")
-            emptyList()
-        }
+        } catch (e: Exception) { emptyList() }
     }
-    
-    private suspend fun findBestMatch(title: String, originalTitle: String, year: Int, type: String): SearchResult? {
-        // 1. PRIMER INTENTO: Búsqueda exacta (Español)
-        var results = searchInternal(title)
-        
-        // 2. SEGUNDO INTENTO: Si falló, buscar título original (Inglés)
-        // Esto es CLAVE para películas como "Fast X" vs "Rápidos y furiosos"
-        if (results.isEmpty() && title != originalTitle && originalTitle.isNotEmpty()) {
-            ScreenLogger.log("KRONOS", "⚠️ Falló búsqueda en ES. Intentando EN: '$originalTitle'")
-            results = searchInternal(originalTitle)
-        }
-
-        if (results.isEmpty()) return null
-
-        val targetEs = normalize(title)
-        val targetEn = normalize(originalTitle)
-
-        val candidates = results.filter { 
-             it.type == type || 
-             (type == "tv" && it.url?.contains("/series/") == true) || 
-             (type == "movie" && it.url?.contains("/peliculas/") == true)
-        }
-
-        return candidates.minByOrNull { cand ->
-            // ... (Resto de tu lógica de filtrado de año igual) ...
-            val currentTitle = normalize(cand.title ?: "")
-            val candYear = cand.year?.toIntOrNull() ?: 0
-            var score = 100
-            
-            // Comparamos contra Español Y contra Inglés
-            if (currentTitle.contains(targetEs) || targetEs.contains(currentTitle)) score -= 50
-            if (currentTitle.contains(targetEn) || targetEn.contains(currentTitle)) score -= 50
-            
-            if (type == "movie" && year > 0 && candYear > 0) {
-                val diff = abs(year - candYear)
-                if (diff == 0) score -= 40
-                if (diff > 1) score += 200
-            }
-            score
-        }
-    }
-    
 
     private fun searchInternal(query: String): List<SearchResult> {
         if (scraperModule == null) return emptyList()
@@ -123,10 +143,7 @@ class PythonProvider(context: Context) : KronosProvider {
             val pyObject = scraperModule.callAttr("search", query)
             val jsonStr = pyObject?.toString() ?: "[]"
             parseSearchResults(jsonStr)
-        } catch (e: Exception) {
-            ScreenLogger.log("PYTHON_ERR", "Error en search: ${e.message}")
-            emptyList()
-        }
+        } catch (e: Exception) { emptyList() }
     }
 
     private fun parseSourceLinks(json: String): List<SourceLink> {
@@ -136,7 +153,6 @@ class PythonProvider(context: Context) : KronosProvider {
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
                 val isDirect = obj.optString("url").endsWith(".mp4") || obj.optString("url").contains(".m3u8")
-                
                 list.add(SourceLink(
                     name = obj.optString("server", "Server"),
                     url = obj.optString("url", ""),
@@ -173,8 +189,16 @@ class PythonProvider(context: Context) : KronosProvider {
     private fun normalize(str: String): String = Normalizer.normalize(str, Normalizer.Form.NFD)
         .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "").lowercase().replace(Regex("[^a-z0-9]"), "")
 
+    private fun cleanString(str: String): String = str.replace(":", "").replace("-", " ").trim()
+
+    private fun isAsianText(str: String): Boolean {
+        for (char in str) {
+            if (Character.UnicodeBlock.of(char) == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS) return true
+        }
+        return false
+    }
+
     override suspend fun search(query: String) = searchInternal(query)
     override suspend fun loadEpisodes(url: String) = emptyList<Episode>()
     override suspend fun loadStream(id: String, type: String) = null
 }
-
