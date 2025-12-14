@@ -1,13 +1,12 @@
 package com.kronos.tv.models
 
-// SOLO DEJA ESTOS DOS AQUÍ
 data class SearchResult(
     val title: String?,
     val url: String?,
     val img: String?,
     val id: String,
     val type: String?,
-    val year: String? = "" // <--- Agrega este campo si no existe
+    val year: String? = ""
 )
 
 data class Episode(
@@ -17,4 +16,14 @@ data class Episode(
     val episode: Int = 0
 )
 
-// ¡BORRA SourceLink DE AQUÍ!
+// Reintegrado aquí por arquitectura limpia. 
+// Define qué es un enlace para toda la app (UI, Player y Python).
+data class SourceLink(
+    val name: String,         // Ej: "Fembed", "Streamtape"
+    val url: String,          // La URL final
+    val quality: String,      // "720p", "1080p"
+    val language: String,     // "Latino", "Subtitulado"
+    val provider: String = "", // Qué plugin lo encontró (Ej: "SoloLatino")
+    val isDirect: Boolean = false, // Si es .mp4/.m3u8 directo
+    val headers: Map<String, String>? = null // Vital para enviar Referer/User-Agent al reproductor si es necesario
+)
