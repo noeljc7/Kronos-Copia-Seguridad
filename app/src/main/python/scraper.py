@@ -5,19 +5,28 @@ import base64
 import urllib.parse
 from java import jclass
 
-# --- AQUÍ ESTÁ EL TRUCO PARA VERLO EN PANTALLA ---
-# Importamos tu clase de Kotlin directamente
-ScreenLogger = jclass("com.kronos.tv.ScreenLogger")
+# --- CORRECCIÓN AQUÍ ---
+# Apuntamos a la dirección correcta de tu archivo Kotlin:
+# Paquete: com.kronos.tv.ui
+# Objeto: AppLogger
+try:
+    AppLogger = jclass("com.kronos.tv.ui.AppLogger")
+    has_logger = True
+except:
+    # Si falla (por ejemplo en pruebas de PC), evitamos que crashee
+    has_logger = False
 
 def log(msg):
-    # Enviamos el mensaje directo a la lista que se muestra en la UI
-    ScreenLogger.log("PY_INFO", str(msg))
+    if has_logger:
+        AppLogger.log("PY_INFO", str(msg))
 
 def warn(msg):
-    ScreenLogger.log("PY_WARN", str(msg))
+    if has_logger:
+        AppLogger.log("PY_WARN", str(msg))
 
 def error(msg):
-    ScreenLogger.log("PY_ERR", str(msg))
+    if has_logger:
+        AppLogger.log("PY_ERR", str(msg))
 
 class SoloLatinoScraper:
     def __init__(self):
@@ -32,23 +41,20 @@ class SoloLatinoScraper:
     def get_html(self, url):
         try:
             log(f"🌐 GET: {url}")
-            # verify=False es vital
             r = self.session.get(url, timeout=15, verify=False)
             
             log(f"📡 Status Code: {r.status_code}")
             
             if r.status_code != 200:
                 error(f"Error HTTP: {r.status_code}")
-                # Si es 403, es Cloudflare bloqueando
-                if r.status_code == 403: error("⛔ Acceso Denegado (Posible Cloudflare)")
+                if r.status_code == 403: error("⛔ Acceso Denegado (Cloudflare)")
                 return None
                 
             html = r.text
             log(f"📄 HTML recibido: {len(html)} chars")
             
-            # Chequeo rápido de Cloudflare
             if "Just a moment" in html or "cloudflare" in html.lower():
-                error("🔥 ¡CLOUDFLARE DETECTADO! HTML encriptado.")
+                error("🔥 CLOUDFLARE DETECTADO")
             
             return html
         except Exception as e:
@@ -58,44 +64,37 @@ class SoloLatinoScraper:
     def do_search(self, query):
         try:
             log(f"🔍 BUSCANDO: '{query}'")
-            
-            # 1. Búsqueda HTML
             search_url = f"{self.base_url}/?s={urllib.parse.quote(query)}"
             html = self.get_html(search_url)
             
             if not html: 
-                error("HTML vacío o nulo")
+                error("HTML vacío")
                 return []
 
             results = []
             
-            # 2. DEBUG HTML
-            # Contamos cuántas veces aparece <article para saber si descargamos la web correcta
+            # Debug HTML
             count_articles = html.count("<article")
-            log(f"🧩 Etiquetas <article> encontradas: {count_articles}")
+            log(f"🧩 Etiquetas <article>: {count_articles}")
             
             if count_articles == 0:
-                warn("⚠️ No hay artículos. ¿Cambió el diseño o es un Captcha?")
+                warn("⚠️ No se encontraron artículos. El HTML podría ser distinto.")
 
-            # Regex basado en tu snippet
+            # Regex
             articles = re.findall(r'<article(.*?)</article>', html, re.DOTALL)
             
             for i, article in enumerate(articles):
                 try:
-                    # Extraer Título
                     title_match = re.search(r'alt=["\']([^"\']+)["\']', article)
                     if not title_match: title_match = re.search(r'<h3>(.*?)</h3>', article)
                     t = title_match.group(1) if title_match else "Sin Titulo"
                     
-                    # Extraer Año (Tu requerimiento: <p>2025</p>)
                     year_match = re.search(r'<p>\s*(\d{4})\s*</p>', article)
                     y = year_match.group(1) if year_match else "0"
                     
-                    # Extraer URL
                     url_match = re.search(r'href=["\']([^"\']+)["\']', article)
                     u = url_match.group(1) if url_match else ""
                     
-                    # Logueamos cada candidato para ver qué ve el robot
                     log(f"   #{i+1}: {t} ({y}) -> {u}")
                     
                     if u:
@@ -119,7 +118,7 @@ class SoloLatinoScraper:
             error(f"CRASH SEARCH: {e}")
             return []
 
-    # --- EXTRACCIÓN (Simplificada para no llenar pantalla, pero funcional) ---
+    # --- EXTRACCIÓN (Misma lógica, mismos logs) ---
     def scrape_url(self, url):
         log(f"⛏️ EXTRAYENDO: {url}")
         found_links = []
@@ -157,7 +156,7 @@ class SoloLatinoScraper:
         log(f"🏁 TOTAL ENLACES: {len(found_links)}")
         return found_links
 
-    # --- HELPERS (Iguales que antes) ---
+    # --- HELPERS (Iguales) ---
     def _scrape_double_hop(self, url):
         links = []
         try:
