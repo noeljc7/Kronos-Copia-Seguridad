@@ -36,7 +36,7 @@ import androidx.tv.material3.Text
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import coil.compose.AsyncImage
 import com.kronos.tv.providers.ProviderManager
-import com.kronos.tv.providers.SourceLink
+import com.kronos.tv.models.SourceLink
 import kotlinx.coroutines.delay
 import java.util.Locale
 
