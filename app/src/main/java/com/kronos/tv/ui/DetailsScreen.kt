@@ -28,10 +28,6 @@ import com.kronos.tv.network.TmdbMovie
 import com.kronos.tv.utils.HistoryManager
 import com.kronos.tv.utils.FavoriteItem
 
-// 👇 Importamos nuestros componentes híbridos
-import com.kronos.tv.ui.NetflixButton
-import com.kronos.tv.ui.BorderText
-
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun DetailsScreen(
@@ -40,16 +36,15 @@ fun DetailsScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    // Recuerda HistoryManager para que sobreviva a recomposiciones
     val historyManager = remember { HistoryManager(context) }
     var isFavorite by remember { mutableStateOf(false) }
     
-    // FOCO INICIAL: Botón Reproducir (Para TV)
+    // FOCO INICIAL: Botón Reproducir
     val playButtonFocus = remember { FocusRequester() }
 
     LaunchedEffect(movie.id) {
         isFavorite = historyManager.isFavorite(movie.id)
-        // Intentar dar foco (solo visual en movil, funcional en TV)
+        // Forzar foco
         kotlinx.coroutines.delay(100)
         try { playButtonFocus.requestFocus() } catch(e:Exception){}
     }
@@ -66,7 +61,6 @@ fun DetailsScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
-        // IMAGEN DE FONDO
         AsyncImage(
             model = movie.getFullBackdropUrl(),
             contentDescription = null,
@@ -74,7 +68,6 @@ fun DetailsScreen(
             modifier = Modifier.fillMaxSize().alpha(0.5f)
         )
         
-        // DEGRADADOS PARA LEGIBILIDAD
         Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Transparent, Color(0xFF121212)), startY = 100f)))
         Box(modifier = Modifier.fillMaxSize().background(Brush.horizontalGradient(colors = listOf(Color.Black.copy(alpha = 0.9f), Color.Transparent), endX = 1200f)))
 
@@ -98,7 +91,7 @@ fun DetailsScreen(
                     Spacer(modifier = Modifier.width(15.dp))
                     BorderText(if (movie.media_type == "tv") "SERIE" else "PELÍCULA")
                     Spacer(modifier = Modifier.width(15.dp))
-                    BorderText("HD")
+                    Text("HD", color = Color.Gray)
                 }
                 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -113,18 +106,19 @@ fun DetailsScreen(
                 
                 Spacer(modifier = Modifier.height(30.dp))
                 
-                // BOTONES DE ACCIÓN (Ahora son táctiles)
                 Row {
+                    // BOTÓN 1: REPRODUCIR (Foco Inicial)
                     NetflixButton(
                         text = "Reproducir",
                         icon = Icons.Default.PlayArrow,
-                        onClick = onPlayClick, // <-- ¡ESTO FUNCIONARÁ AL TOCAR!
-                        isPrimary = true,
-                        focusRequester = playButtonFocus
+                        onClick = onPlayClick,
+                        isPrimary = true, // Color rojo base
+                        focusRequester = playButtonFocus // <--- CONECTADO
                     )
                     
                     Spacer(modifier = Modifier.width(16.dp))
 
+                    // BOTÓN 2: FAVORITOS
                     NetflixButton(
                         text = if (isFavorite) "En Favoritos" else "Añadir a Lista",
                         icon = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -133,6 +127,7 @@ fun DetailsScreen(
                     
                     Spacer(modifier = Modifier.width(16.dp))
                     
+                    // BOTÓN 3: VOLVER
                     NetflixButton(
                         text = "Volver",
                         icon = Icons.Default.ArrowBack, 
