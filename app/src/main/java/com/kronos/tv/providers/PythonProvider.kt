@@ -3,77 +3,118 @@ package com.kronos.tv.providers
 import android.content.Context
 import com.chaquo.python.Python
 import com.kronos.tv.models.SearchResult
+import com.kronos.tv.models.SourceLink
 import com.kronos.tv.ui.AppLogger
+import com.kronos.tv.utils.Constants
+import com.kronos.tv.utils.PythonBoot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-// Ahora pasamos el nombre del módulo (ej: "sololatino") al constructor
 class PythonProvider(
-    private val context: Context, 
-    private val moduleName: String = "sololatino"
+    private val context: Context,
+    private val moduleName: String // Ej: "sololatino"
 ) : KronosProvider {
 
     override val name = moduleName.replace("_", " ").capitalize()
     override val language = "Multi"
 
-    private val python by lazy { Python.getInstance() }
+    // Inicialización Lazy de Python
+    private val python by lazy { 
+        if (!Python.isStarted()) PythonBoot.init(context)
+        Python.getInstance() 
+    }
+    
+    // Módulo ayudante interno
     private val loaderModule by lazy { python.getModule("loader") }
 
     // --- BÚSQUEDA ---
     override suspend fun search(query: String): List<SearchResult> {
         return withContext(Dispatchers.IO) {
-            // Verificar si tenemos el plugin, si no, intentar bajarlo (fallback simple)
+            // Verificar si tenemos el plugin instalado
             if (!PluginRepository.isPluginInstalled(context, moduleName)) {
                 AppLogger.log("PROV", "⚠️ Plugin $moduleName no encontrado. Intentando descargar...")
-                PluginRepository.updatePlugin(context, moduleName)
+                val success = PluginRepository.downloadPlugin(context, moduleName, Constants.PROVIDER_REPO_URL)
+                if (!success) return@withContext emptyList()
             }
 
-            // Llamamos a loader.py -> run_plugin_method
-            val jsonResult = callPython("search", query)
+            // Ejecutar: sololatino.search(query)
+            val jsonResult = callPluginMethod("search", query)
             parseSearchResults(jsonResult)
         }
     }
 
-    // --- OBTENER LINKS ---
+    // --- PELÍCULAS ---
     override suspend fun getMovieLinks(tmdbId: Int, title: String, originalTitle: String, year: Int): List<SourceLink> {
-        // Para simplificar, asumiremos que el plugin tiene un método "get_links" que toma una URL.
-        // En un sistema real, primero buscaríamos (search) para obtener la URL del sitio.
-        // Aquí simulamos que pasamos el título para que el scraper busque y resuelva.
         return withContext(Dispatchers.IO) {
-             // NOTA: Aquí deberíamos pasar la URL que obtuvimos en search(), 
-             // pero como ejemplo pasamos el titulo para que el python haga search+extract interno si quiere.
-             // O ajustamos tu interfaz.
-             emptyList() 
-             // *PENDIENTE*: Ajustar lógica de flujo. Normalmente Search -> Result.url -> GetLinks(Result.url)
-        }
-    }
-    
-    // Método auxiliar para llamar a enlaces dado una URL (que viene de search)
-    suspend fun resolveUrl(url: String): List<SourceLink> {
-        return withContext(Dispatchers.IO) {
-            val jsonResult = callPython("get_links", url)
-            parseSourceLinks(jsonResult)
+            // Estrategia: 
+            // 1. Buscamos en el plugin usando el título
+            val searchResults = search(title)
+            
+            // 2. Filtramos el mejor resultado (Lógica simple por ahora: primer resultado que coincida año)
+            // *Nota*: En una versión avanzada, moveríamos esta lógica de filtrado a Python o la haríamos más robusta aquí.
+            val bestMatch = searchResults.find { it.year == year.toString() || it.year == (year-1).toString() || it.year == (year+1).toString() } 
+                            ?: searchResults.firstOrNull()
+
+            if (bestMatch == null || bestMatch.url.isNullOrEmpty()) {
+                AppLogger.log("PROV", "❌ No se encontró coincidencia para: $title")
+                return@withContext emptyList()
+            }
+
+            AppLogger.log("PROV", "🎯 Coincidencia encontrada: ${bestMatch.title} -> ${bestMatch.url}")
+            
+            // 3. Extraemos los enlaces de esa URL
+            val jsonLinks = callPluginMethod("get_links", bestMatch.url)
+            parseSourceLinks(jsonLinks)
         }
     }
 
-    private fun callPython(method: String, arg: String): String {
+    // --- SERIES (EPISODIOS) ---
+    override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int): List<SourceLink> {
+         return withContext(Dispatchers.IO) {
+            // 1. Buscar la serie
+            val searchResults = search(showTitle)
+            val bestMatch = searchResults.firstOrNull() // Simplificado
+
+            if (bestMatch == null || bestMatch.url.isNullOrEmpty()) return@withContext emptyList()
+
+            // 2. Construir URL del episodio
+            // *Truco*: Muchos sitios usan formato /serie/nombre-temporada-x-episodio
+            // Aquí delegamos a una función de Python si existiera, o lo hacemos manual.
+            // Por ahora, asumimos que el plugin tiene un método inteligente o lo haremos manual.
+            
+            // INTENTO: Llamar a un método "get_episode_links" en python si existe, pasando url_serie, temp, cap
+            // Como tu scraper.py actual solo tiene get_links(url), necesitamos construir la URL aquí o mejorar el scraper.
+            // Haremos un hack simple para sololatino:
+            
+            var episodeUrl = bestMatch.url.replace("/series/", "/episodios/")
+            if (episodeUrl.endsWith("/")) episodeUrl = episodeUrl.dropLast(1)
+            episodeUrl = "$episodeUrl-${season}x${episode}"
+            
+            AppLogger.log("PROV", "📺 Intentando episodio: $episodeUrl")
+            
+            val jsonLinks = callPluginMethod("get_links", episodeUrl)
+            parseSourceLinks(jsonLinks)
+        }
+    }
+
+    // --- AYUDANTES ---
+
+    private fun callPluginMethod(method: String, arg: String): String {
         return try {
+            // Llama a loader.py -> run_plugin_method("sololatino", "search", "Batman")
             val result = loaderModule.callAttr("run_plugin_method", moduleName, method, arg)
             result?.toString() ?: "[]"
         } catch (e: Exception) {
-            AppLogger.log("PY_ERR", "Error en llamada Python: ${e.message}")
+            AppLogger.log("PY_ERR", "Error ejecutando $method en $moduleName: ${e.message}")
             "[]"
         }
     }
-    
-    // ... (Tus métodos de parseo JSON parseSearchResults y parseSourceLinks se mantienen igual) ...
-    // COPIA AQUÍ TUS MÉTODOS PRIVADOS parseSearchResults y parseSourceLinks DEL CÓDIGO ANTERIOR
+
     private fun parseSearchResults(json: String): List<SearchResult> {
         val list = mutableListOf<SearchResult>()
         try {
-            if (json.contains("error")) { AppLogger.log("JSON", json); return list }
             val array = JSONArray(json)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
@@ -86,31 +127,28 @@ class PythonProvider(
                     id = obj.optString("url")
                 ))
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) { 
+             if (!json.startsWith("[]")) AppLogger.log("JSON_ERR", "Error parseando search: $json")
+        }
         return list
     }
 
     private fun parseSourceLinks(json: String): List<SourceLink> {
         val list = mutableListOf<SourceLink>()
         try {
-            if (json.contains("error")) return list
             val array = JSONArray(json)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
                 list.add(SourceLink(
-                    name = obj.optString("server"),
+                    name = obj.optString("server", "Server"),
                     url = obj.optString("url"),
-                    quality = obj.optString("quality"),
-                    language = obj.optString("lang"),
+                    quality = obj.optString("quality", "HD"),
+                    language = obj.optString("lang", "Latino"),
                     provider = moduleName,
-                    isDirect = false // Ajustar según scraper
+                    isDirect = obj.optBoolean("is_direct", false)
                 ))
             }
         } catch (e: Exception) { }
         return list
     }
-    
-    override suspend fun getEpisodeLinks(tmdbId: Int, showTitle: String, season: Int, episode: Int) = emptyList<SourceLink>()
-    override suspend fun loadEpisodes(url: String) = emptyList<com.kronos.tv.models.Episode>()
-    override suspend fun loadStream(id: String, type: String) = null
 }
