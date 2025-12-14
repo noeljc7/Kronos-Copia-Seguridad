@@ -139,13 +139,19 @@ class PythonProvider(
             val array = JSONArray(json)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
+                
+                // Leemos si es directo desde Python
+                val isDirect = obj.optBoolean("is_direct", false) 
+                
                 list.add(SourceLink(
                     name = obj.optString("server", "Server"),
                     url = obj.optString("url"),
                     quality = obj.optString("quality", "HD"),
                     language = obj.optString("lang", "Latino"),
                     provider = moduleName,
-                    isDirect = obj.optBoolean("is_direct", false)
+                    isDirect = isDirect,
+                    // 👇 Lógica: Si no es directo, suele requerir WebView
+                    requiresWebView = !isDirect 
                 ))
             }
         } catch (e: Exception) { }
