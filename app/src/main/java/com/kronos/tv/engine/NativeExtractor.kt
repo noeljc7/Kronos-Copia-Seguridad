@@ -1,8 +1,7 @@
 package com.kronos.tv.engine
 
 import android.util.Base64
-import com.kronos.tv.ScreenLogger
-import com.kronos.tv.providers.SourceLink
+import com.kronos.tv.ui.AppLogger
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -10,6 +9,8 @@ import org.json.JSONObject
 import java.util.Locale
 import java.util.regex.Pattern
 import java.util.concurrent.TimeUnit
+
+// 👇 CORRECCIÓN AQUÍ: Importamos desde models, no providers
 import com.kronos.tv.models.SourceLink
 
 object NativeExtractor {
@@ -25,16 +26,12 @@ object NativeExtractor {
     fun extract(iframeUrl: String): List<SourceLink> {
         val links = mutableListOf<SourceLink>()
         try {
-            ScreenLogger.log("NATIVE", "🕵️ Analizando: $iframeUrl")
+            AppLogger.log("NATIVE", "🕵️ Analizando: $iframeUrl")
 
-            // 1. Detección de ID Universal (MEJORADA)
-            // Captura: /f/ID, /video/ID, ?id=ID, &id=ID
+            // 1. Detección de ID Universal
             val matcher = Pattern.compile("(?<=\\/f\\/|\\/video\\/|[?&]id=)([a-zA-Z0-9-]+)").matcher(iframeUrl)
             
             if (matcher.find()) {
-                val videoId = matcher.group(1)
-                // ScreenLogger.log("NATIVE", "🆔 ID Detectado: $videoId") // Debug opcional
-                
                 val request = Request.Builder()
                     .url(iframeUrl)
                     .header("User-Agent", USER_AGENT)
@@ -54,14 +51,14 @@ object NativeExtractor {
                     links.addAll(extractXuPalaceHtml(html))
                 }
             } else {
-                ScreenLogger.log("NATIVE", "⚠️ No se pudo extraer ID de la URL")
+                AppLogger.log("NATIVE", "⚠️ No se pudo extraer ID de la URL")
             }
 
         } catch (e: Exception) {
-            ScreenLogger.log("NATIVE_ERROR", e.message ?: "Error desconocido")
+            AppLogger.log("NATIVE_ERROR", e.message ?: "Error desconocido")
         }
         
-        ScreenLogger.log("NATIVE", "✅ Total enlaces extraídos: ${links.size}")
+        AppLogger.log("NATIVE", "✅ Total enlaces extraídos: ${links.size}")
         return links
     }
 
@@ -90,7 +87,7 @@ object NativeExtractor {
                         }
                     }
                 }
-                ScreenLogger.log("NATIVE", "🔹 Embed69 JSON procesado")
+                AppLogger.log("NATIVE", "🔹 Embed69 JSON procesado")
             }
         } catch (e: Exception) {}
         return found
@@ -116,7 +113,7 @@ object NativeExtractor {
                     found.add(createLink(serverName, rawUrl, lang))
                 }
             }
-            if (found.isNotEmpty()) ScreenLogger.log("NATIVE", "🔸 XuPalace HTML procesado")
+            if (found.isNotEmpty()) AppLogger.log("NATIVE", "🔸 XuPalace HTML procesado")
         } catch (e: Exception) {}
         return found
     }
@@ -145,6 +142,16 @@ object NativeExtractor {
     private fun createLink(host: String, url: String, lang: String): SourceLink {
         var prettyHost = host.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
         val isDirect = url.endsWith(".mp4") || url.endsWith(".m3u8")
-        return SourceLink(name = prettyHost, url = url, quality = "HD", language = lang, provider = "SoloLatino", isDirect = isDirect, requiresWebView = !isDirect)
+        
+        return SourceLink(
+            name = prettyHost, 
+            url = url, 
+            quality = "HD", 
+            language = lang, 
+            provider = "SoloLatino", 
+            isDirect = isDirect, 
+            // 👇 ESTE ES EL CAMPO QUE CAUSABA ERROR, AHORA ESTÁ PRESENTE
+            requiresWebView = !isDirect
+        )
     }
 }
