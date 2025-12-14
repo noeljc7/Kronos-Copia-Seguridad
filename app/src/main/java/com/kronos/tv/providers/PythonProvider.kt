@@ -74,12 +74,23 @@ class PythonProvider(context: Context) : KronosProvider {
             emptyList()
         }
     }
-
+    
     private suspend fun findBestMatch(title: String, originalTitle: String, year: Int, type: String): SearchResult? {
-        val results = searchInternal(title)
+        // 1. PRIMER INTENTO: Búsqueda exacta (Español)
+        var results = searchInternal(title)
+        
+        // 2. SEGUNDO INTENTO: Si falló, buscar título original (Inglés)
+        // Esto es CLAVE para películas como "Fast X" vs "Rápidos y furiosos"
+        if (results.isEmpty() && title != originalTitle && originalTitle.isNotEmpty()) {
+            ScreenLogger.log("KRONOS", "⚠️ Falló búsqueda en ES. Intentando EN: '$originalTitle'")
+            results = searchInternal(originalTitle)
+        }
+
         if (results.isEmpty()) return null
 
         val targetEs = normalize(title)
+        val targetEn = normalize(originalTitle)
+
         val candidates = results.filter { 
              it.type == type || 
              (type == "tv" && it.url?.contains("/series/") == true) || 
@@ -87,11 +98,14 @@ class PythonProvider(context: Context) : KronosProvider {
         }
 
         return candidates.minByOrNull { cand ->
+            // ... (Resto de tu lógica de filtrado de año igual) ...
             val currentTitle = normalize(cand.title ?: "")
             val candYear = cand.year?.toIntOrNull() ?: 0
             var score = 100
             
+            // Comparamos contra Español Y contra Inglés
             if (currentTitle.contains(targetEs) || targetEs.contains(currentTitle)) score -= 50
+            if (currentTitle.contains(targetEn) || targetEn.contains(currentTitle)) score -= 50
             
             if (type == "movie" && year > 0 && candYear > 0) {
                 val diff = abs(year - candYear)
@@ -101,6 +115,7 @@ class PythonProvider(context: Context) : KronosProvider {
             score
         }
     }
+    
 
     private fun searchInternal(query: String): List<SearchResult> {
         if (scraperModule == null) return emptyList()
