@@ -6,5 +6,5 @@ object Constants {
 
     // URL para descargar actualizaciones (Por ahora pon una dummy o tu repo real)
     // Si no tienes repo, no importa, haremos un truco en el paso 2 para que no falle.
-    const val PROVIDER_REPO_URL = "https://raw.githubusercontent.com/usuario/repo/main/sololatino.py"
+    const val PROVIDER_REPO_URL = "https://raw.githubusercontent.com/noeljc7/Kronos-Copia-Seguridad/refs/heads/main/kronos_script/sololatino.py"
 }
