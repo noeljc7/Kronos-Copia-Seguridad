@@ -7,12 +7,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
-// Asegúrate de que este Manager solo use el proveedor de Python
 class ProviderManager(context: Context) {
 
-    // Instanciamos nuestro cerebro Python
+    // Registramos los proveedores activos
     private val activeProviders = listOf<KronosProvider>(
-        PythonProvider(context) 
+        PythonProvider(context)
     )
 
     suspend fun getLinks(
@@ -25,7 +24,10 @@ class ProviderManager(context: Context) {
         episode: Int = 0
     ): List<SourceLink> = coroutineScope {
         
-        if (activeProviders.isEmpty()) return@coroutineScope emptyList()
+        if (activeProviders.isEmpty()) {
+            ScreenLogger.log("KRONOS", "⚠️ No hay proveedores activos.")
+            return@coroutineScope emptyList()
+        }
 
         val deferredResults = activeProviders.map { provider ->
             async(Dispatchers.IO) {
@@ -42,9 +44,8 @@ class ProviderManager(context: Context) {
             }
         }
         
-        // Unimos resultados y ordenamos por calidad (1080p arriba)
         val results = deferredResults.awaitAll().flatten()
+        ScreenLogger.log("KRONOS", "✅ Total enlaces encontrados: ${results.size}")
         return@coroutineScope results.sortedByDescending { it.quality }
     }
 }
-
