@@ -11,43 +11,46 @@ import java.io.File
 object PluginRepository {
 
     private val client = OkHttpClient()
-    
-    // URL RAW de GitHub donde alojarás tu script (cámbiala por la tuya real luego)
-    // Por ahora usaremos un ejemplo o una variable vacía para que tú la pongas
-    private const val GITHUB_RAW_URL = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/scrapers/sololatino.py"
 
-    suspend fun updatePlugin(context: Context, pluginName: String, url: String = GITHUB_RAW_URL): Boolean {
+    // Descarga un script y lo guarda en /data/.../files/plugins/nombre.py
+    suspend fun downloadPlugin(context: Context, pluginName: String, url: String): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                AppLogger.log("REPO", "⬇️ Descargando plugin: $pluginName desde $url")
+                AppLogger.log("REPO", "⬇️ Iniciando descarga de: $pluginName")
                 
                 val request = Request.Builder().url(url).build()
                 val response = client.newCall(request).execute()
 
                 if (!response.isSuccessful) {
-                    AppLogger.log("REPO", "❌ Error descarga: ${response.code}")
+                    AppLogger.log("REPO", "❌ Error HTTP: ${response.code}")
                     return@withContext false
                 }
 
-                val code = response.body?.string() ?: return@withContext false
-                
-                // Guardar en /files/plugins/nombre.py
+                val scriptContent = response.body?.string()
+                if (scriptContent.isNullOrEmpty()) {
+                    AppLogger.log("REPO", "❌ El archivo descargado está vacío")
+                    return@withContext false
+                }
+
+                // Crear carpeta plugins si no existe
                 val pluginsDir = File(context.filesDir, "plugins")
                 if (!pluginsDir.exists()) pluginsDir.mkdirs()
-                
-                val scriptFile = File(pluginsDir, "$pluginName.py")
-                scriptFile.writeText(code)
-                
-                AppLogger.log("REPO", "✅ Plugin instalado/actualizado: ${scriptFile.absolutePath}")
+
+                // Guardar el archivo .py
+                val file = File(pluginsDir, "$pluginName.py")
+                file.writeText(scriptContent)
+
+                AppLogger.log("REPO", "✅ Plugin guardado en: ${file.absolutePath}")
                 return@withContext true
-                
+
             } catch (e: Exception) {
-                AppLogger.log("REPO", "🔥 Excepción actualizando: ${e.message}")
+                AppLogger.log("REPO", "🔥 Excepción al descargar: ${e.message}")
+                e.printStackTrace()
                 return@withContext false
             }
         }
     }
-    
+
     // Verifica si el plugin ya existe localmente
     fun isPluginInstalled(context: Context, pluginName: String): Boolean {
         val file = File(context.filesDir, "plugins/$pluginName.py")
