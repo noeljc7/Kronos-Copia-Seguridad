@@ -25,5 +25,6 @@ data class SourceLink(
     val language: String,     // "Latino", "Subtitulado"
     val provider: String = "", // Qué plugin lo encontró (Ej: "SoloLatino")
     val isDirect: Boolean = false, // Si es .mp4/.m3u8 directo
+    val requiresWebView: Boolean = false,
     val headers: Map<String, String>? = null // Vital para enviar Referer/User-Agent al reproductor si es necesario
 )
