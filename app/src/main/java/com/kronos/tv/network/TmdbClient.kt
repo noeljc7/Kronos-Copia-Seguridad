@@ -6,7 +6,9 @@ import retrofit2.http.GET
 import retrofit2.http.Path
 import retrofit2.http.Query
 
-// --- MODELOS DE DATOS (Estos los mantenemos mejorados para que no falle el Scraper) ---
+// ==========================================
+// 1. MODELOS DE DATOS (DATA CLASSES)
+// ==========================================
 
 data class TmdbResponse(val results: List<TmdbMovie>)
 data class GenreResponse(val genres: List<Genre>)
@@ -86,7 +88,9 @@ data class TmdbSeason(
     fun getPosterUrl() = if (!poster_path.isNullOrBlank()) "https://image.tmdb.org/t/p/w500$poster_path" else "https://via.placeholder.com/500x750?text=No+Image"
 }
 
-// --- INTERFAZ RETROFIT (AQUÍ ESTABAN LOS FALTANTES) ---
+// ==========================================
+// 2. INTERFAZ RETROFIT (DEFINICIÓN DE ENDPOINTS)
+// ==========================================
 
 interface TmdbService {
     @GET("movie/popular")
@@ -94,17 +98,19 @@ interface TmdbService {
     @GET("tv/popular")
     suspend fun getPopularTvShows(@Query("api_key") apiKey: String, @Query("language") language: String = "es-MX", @Query("page") page: Int = 1): TmdbResponse
     
-    // 🔥 RESTAURADOS: Estos son los que faltaban y rompían CatalogScreen y HomeViewModel
+    // Endpoints de Descubrimiento (Cruciales para el Catálogo)
     @GET("discover/movie")
     suspend fun getMoviesByGenre(@Query("api_key") apiKey: String, @Query("with_genres") genreId: Int, @Query("language") language: String = "es-MX", @Query("page") page: Int = 1): TmdbResponse
     @GET("discover/tv")
     suspend fun getTvByGenre(@Query("api_key") apiKey: String, @Query("with_genres") genreId: Int, @Query("language") language: String = "es-MX", @Query("page") page: Int = 1): TmdbResponse
 
+    // Búsqueda
     @GET("search/movie")
     suspend fun searchMovies(@Query("api_key") apiKey: String, @Query("query") query: String, @Query("language") language: String = "es-MX"): TmdbResponse
     @GET("search/tv")
     suspend fun searchTvShows(@Query("api_key") apiKey: String, @Query("query") query: String, @Query("language") language: String = "es-MX"): TmdbResponse
     
+    // Detalles e IDs
     @GET("movie/{movie_id}/external_ids")
     suspend fun getMovieExternalIds(@Path("movie_id") movieId: Int, @Query("api_key") apiKey: String): ExternalIdsResponse
     @GET("tv/{tv_id}/external_ids")
@@ -115,42 +121,21 @@ interface TmdbService {
     @GET("tv/{tv_id}")
     suspend fun getTvShowDetails(@Path("tv_id") tvId: Int, @Query("api_key") apiKey: String, @Query("language") language: String = "es-MX"): TmdbTvDetail
     
+    // Listas de Géneros
     @GET("genre/movie/list")
     suspend fun getMovieGenres(@Query("api_key") apiKey: String, @Query("language") language: String = "es-MX"): GenreResponse
     @GET("genre/tv/list")
     suspend fun getTvGenres(@Query("api_key") apiKey: String, @Query("language") language: String = "es-MX"): GenreResponse
 }
 
-object RetrofitInstance {
-    private const val BASE_URL = "https://api.themoviedb.org/3/"
-    
-    // ⚠️ REEMPLAZA ESTO CON TU API KEY REAL
-    private const val API_KEY = "688d65c7c7e7995438db052275db288d" 
-
-    private val retrofit by lazy { 
-        Retrofit.Builder()
-            .baseUrl(BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build() 
-    }
-    
-    val api: TmdbService by lazy { retrofit.create(TmdbService::class.java) }
-    
-    fun getApiKey(): String = API_KEY
-}
-    suspend fun getTvShowDetails(@Path("tv_id") tvId: Int, @Query("api_key") apiKey: String, @Query("language") language: String = "es-MX"): TmdbTvDetail
-    
-    // Agregué endpoints faltantes que suelen ser útiles
-    @GET("genre/movie/list")
-    suspend fun getMovieGenres(@Query("api_key") apiKey: String, @Query("language") language: String = "es-MX"): GenreResponse
-    @GET("genre/tv/list")
-    suspend fun getTvGenres(@Query("api_key") apiKey: String, @Query("language") language: String = "es-MX"): GenreResponse
-}
+// ==========================================
+// 3. INSTANCIA SINGLETON (CLIENTE DE RED)
+// ==========================================
 
 object RetrofitInstance {
     private const val BASE_URL = "https://api.themoviedb.org/3/"
     
-    // ⚠️ REEMPLAZA ESTO CON TU API KEY REAL O NO FUNCIONARÁ NADA
+    // ⚠️ ASEGÚRATE DE QUE ESTA SEA TU API KEY REAL
     private const val API_KEY = "688d65c7c7e7995438db052275db288d" 
 
     private val retrofit by lazy { 
